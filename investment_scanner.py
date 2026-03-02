@@ -94,5 +94,32 @@ def parse_area(text: str | None) -> int | None:
     return int(re.sub(r"[^\d]", "", m.group(1)))
 
 
+def nutzungsidee(titel: str, flaeche_m2: int | None) -> str:
+    """
+    Regelbasierte Nutzungsidee basierend auf Titel-Keywords und Fläche.
+    """
+    t = titel.lower()
+    f = flaeche_m2 or 0
+
+    if any(k in t for k in ["wald", "forst", "holz"]):
+        return "Holzertrag, Erholungswald"
+    if any(k in t for k in ["bauland", "baugrundstück", "bauplatz", "wohnbauland"]):
+        return "Tiny House, Ferienwohnung, Neubau"
+    if any(k in t for k in ["gewerbe", "industrie", "lager"]):
+        return "Stellplatz, Lagerplatz, Automatenstandort"
+    if any(k in t for k in ["freizeit", "camping", "erholung", "gartenland"]):
+        return "Freizeitgrundstück, Camping"
+    if any(k in t for k in ["acker", "landwirtschaft", "wiese", "grünland"]):
+        if f >= 2000:
+            return "PV-Anlage (Pacht/Eigen), Landwirtschaft"
+        return "Kleingarten, Freizeitgrundstück"
+    # Kein Keyword → nach Fläche entscheiden
+    if f >= 5000:
+        return "PV-Anlage (Pacht/Eigen)"
+    if f >= 500:
+        return "Kleingarten, Gartennutzung"
+    return "Stellplatz, Lagerplatz"
+
+
 if __name__ == "__main__":
     print("Investment Scanner — Skeleton OK")
