@@ -41,8 +41,7 @@ HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
-_PRICE_RE = re.compile(r"\d+")
-_AREA_RE  = re.compile(r"(\d[\d.]*)\s*(?:m²|m2|qm)", re.IGNORECASE)
+_AREA_RE = re.compile(r"(\d[\d.]*)\s*(?:m²|m2|qm)", re.IGNORECASE)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # HILFSFUNKTIONEN
