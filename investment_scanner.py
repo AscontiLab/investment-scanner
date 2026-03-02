@@ -98,6 +98,8 @@ def nutzungsidee(titel: str, flaeche_m2: int | None) -> str:
     """
     Regelbasierte Nutzungsidee basierend auf Titel-Keywords und Fläche.
     """
+    if not titel:
+        return "Stellplatz, Lagerplatz"
     t = titel.lower()
     f = flaeche_m2 or 0
 
