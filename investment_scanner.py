@@ -134,10 +134,12 @@ def scrape_kleinanzeigen(session: requests.Session) -> list[dict]:
     Gibt Liste von Dicts zurück.
     """
     url   = f"https://www.kleinanzeigen.de/s-grundstuecke-garten/preis::{MAX_PRICE}/c207"
-    print(f"  Kleinanzeigen: {url}")
+    logger.info("Kleinanzeigen: %s", url)
     results = []
 
     for page in range(1, 4):  # max 3 Seiten
+        if page > 1:
+            time.sleep(PAUSE_S)
         page_url = url if page == 1 else url.replace("/c207", f"/seite:{page}/c207")
         r = safe_get(session, page_url)
         if r is None:
@@ -145,9 +147,10 @@ def scrape_kleinanzeigen(session: requests.Session) -> list[dict]:
         soup = BeautifulSoup(r.text, "html.parser")
         items = soup.select("article.aditem")
         if not items:
-            print(f"    Seite {page}: keine Einträge (HTML-Struktur prüfen!)")
+            logger.warning("Kleinanzeigen Seite %d: keine Einträge (HTML-Struktur prüfen!)", page)
             break
 
+        page_count = 0
         for item in items:
             try:
                 title_el = item.select_one("a.ellipsis")
@@ -165,7 +168,7 @@ def scrape_kleinanzeigen(session: requests.Session) -> list[dict]:
                 desc_raw  = desc_el.get_text(strip=True)  if desc_el  else ""
 
                 price = parse_price(price_raw)
-                if price and price > MAX_PRICE:
+                if price is not None and price > MAX_PRICE:
                     continue
                 if not in_region(loc_raw):
                     continue
@@ -190,7 +193,12 @@ def scrape_kleinanzeigen(session: requests.Session) -> list[dict]:
                 else:
                     area_match = _AREA_RE.search(title + " " + desc_raw)
                     if area_match:
-                        flaeche = int(re.sub(r"[^\d]", "", area_match.group(1)))
+                        raw_m2 = area_match.group(1)
+                        if "," in raw_m2:
+                            raw_m2 = raw_m2.replace(".", "").replace(",", ".")
+                        elif re.search(r"\.\d{3}$", raw_m2):
+                            raw_m2 = raw_m2.replace(".", "")
+                        flaeche = int(float(raw_m2))
 
                 results.append({
                     "kategorie":    "Grundstück",
@@ -203,16 +211,16 @@ def scrape_kleinanzeigen(session: requests.Session) -> list[dict]:
                     "nutzung":      nutzungsidee(title, flaeche),
                     "link":         href,
                 })
+                page_count += 1
             except Exception as e:
-                print(f"    Parse-Fehler: {e}")
+                logger.warning("Kleinanzeigen Parse-Fehler: %s", e)
                 continue
 
-        print(f"    Seite {page}: {len(items)} Einträge gefunden")
+        logger.info("Kleinanzeigen Seite %d: %d Einträge, %d nach Filter", page, len(items), page_count)
         if len(items) < 20:
             break
-        time.sleep(PAUSE_S)
 
-    print(f"  → {len(results)} Kleinanzeigen-Grundstücke nach Filter")
+    logger.info("-> %d Kleinanzeigen-Grundstücke nach Filter", len(results))
     return results
 
 
