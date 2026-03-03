@@ -123,5 +123,91 @@ def nutzungsidee(titel: str, flaeche_m2: int | None) -> str:
     return "Stellplatz, Lagerplatz"
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# SCRAPER: GRUNDSTÜCKE
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def scrape_kleinanzeigen(session: requests.Session) -> list[dict]:
+    """
+    Scrapet Grundstücke von Kleinanzeigen.de.
+    Filtert nach Region und Maximalpreis.
+    Gibt Liste von Dicts zurück.
+    """
+    url   = f"https://www.kleinanzeigen.de/s-grundstuecke-garten/preis::{MAX_PRICE}/c207"
+    print(f"  Kleinanzeigen: {url}")
+    results = []
+
+    for page in range(1, 4):  # max 3 Seiten
+        page_url = url if page == 1 else url.replace("/c207", f"/seite:{page}/c207")
+        r = safe_get(session, page_url)
+        if r is None:
+            break
+        soup = BeautifulSoup(r.text, "html.parser")
+        items = soup.select("article.aditem")
+        if not items:
+            print(f"    Seite {page}: keine Einträge (HTML-Struktur prüfen!)")
+            break
+
+        for item in items:
+            try:
+                title_el = item.select_one("a.ellipsis")
+                price_el  = item.select_one(".aditem-main--middle--price-shipping--price")
+                loc_el    = item.select_one(".aditem-main--top--left")
+                desc_el   = item.select_one(".aditem-main--middle--description")
+
+                if not title_el:
+                    continue
+
+                title = title_el.get_text(strip=True)
+                href  = "https://www.kleinanzeigen.de" + title_el.get("href", "")
+                price_raw = price_el.get_text(strip=True) if price_el else ""
+                loc_raw   = loc_el.get_text(strip=True)   if loc_el   else ""
+                desc_raw  = desc_el.get_text(strip=True)  if desc_el  else ""
+
+                price = parse_price(price_raw)
+                if price and price > MAX_PRICE:
+                    continue
+                if not in_region(loc_raw):
+                    continue
+
+                # Fläche aus Beschreibung oder Titel extrahieren
+                # ha hat keine Capture-Group in _AREA_RE → separat prüfen
+                flaeche = None
+                ha_match = re.search(
+                    r"(\d[\d.,]*)\s*ha\b", title + " " + desc_raw, re.IGNORECASE
+                )
+                if ha_match:
+                    flaeche = int(
+                        ha_match.group(1).replace(".", "").replace(",", "")
+                    ) * 10_000
+                else:
+                    area_match = _AREA_RE.search(title + " " + desc_raw)
+                    if area_match:
+                        flaeche = int(re.sub(r"[^\d]", "", area_match.group(1)))
+
+                results.append({
+                    "kategorie":    "Grundstück",
+                    "quelle":       "Kleinanzeigen",
+                    "titel":        title,
+                    "ort":          loc_raw,
+                    "flaeche_m2":   flaeche,
+                    "preis_eur":    price,
+                    "eur_pro_m2":   round(price / flaeche, 2) if price and flaeche else None,
+                    "nutzung":      nutzungsidee(title, flaeche),
+                    "link":         href,
+                })
+            except Exception as e:
+                print(f"    Parse-Fehler: {e}")
+                continue
+
+        print(f"    Seite {page}: {len(items)} Einträge gefunden")
+        if len(items) < 20:
+            break
+        time.sleep(PAUSE_S)
+
+    print(f"  → {len(results)} Kleinanzeigen-Grundstücke nach Filter")
+    return results
+
+
 if __name__ == "__main__":
     print("Investment Scanner — Skeleton OK")
