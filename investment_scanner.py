@@ -526,12 +526,32 @@ def scrape_zvg(session: requests.Session) -> list[dict]:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _parse_rendite(text: str | None) -> float | None:
-    """Extrahiert Rendite-Prozentsatz aus Text wie '6,5 % p.a.' oder '6.5%'."""
+    """Extrahiert Rendite-Prozentsatz aus Text wie '6,5 % p.a.' oder 'Zinsen: 6.5%'.
+
+    Bevorzugt p.a.-Angaben und Zins/Rendite-Schlüsselwörter gegenüber dem ersten
+    Prozentwert im Text (der oft ein Finanzierungsfortschritt wie '52%' ist).
+    Werte über 30 % p.a. werden als unrealistisch verworfen (→ None).
+    """
     if not text:
         return None
+    # Priority 1: explicit p.a. yield
+    m = re.search(r"(\d+[.,]\d+|\d+)\s*%\s*p\.?\s*a\.?", text, re.IGNORECASE)
+    if m:
+        val = float(m.group(1).replace(",", "."))
+        return val if val <= 30.0 else None
+    # Priority 2: anchored keyword
+    m = re.search(
+        r"(?:Zins(?:en|satz)?|Rendite|Verzinsung)\s*[:\s]\s*(\d+[.,]\d+|\d+)\s*%",
+        text, re.IGNORECASE
+    )
+    if m:
+        val = float(m.group(1).replace(",", "."))
+        return val if val <= 30.0 else None
+    # Priority 3: fallback (first %)
     m = re.search(r"(\d+[.,]\d+|\d+)\s*%", text)
     if m:
-        return float(m.group(1).replace(",", "."))
+        val = float(m.group(1).replace(",", "."))
+        return val if val <= 30.0 else None
     return None
 
 
@@ -586,7 +606,10 @@ def scrape_bergfuerst(session: requests.Session) -> list[dict]:
             laufzeit = f"{months_m.group(1)} Monate" if months_m else ""
 
             data_href = card.get("data-href", "")
-            link = ("https://www.bergfuerst.com" + data_href) if data_href else url
+            if data_href and not data_href.startswith("http"):
+                link = "https://www.bergfuerst.com" + data_href
+            else:
+                link = data_href or url
 
             results.append({
                 "kategorie":     "Beteiligung",
@@ -658,7 +681,7 @@ def scrape_wiwin(session: requests.Session) -> list[dict]:
 
             # Mindestanlage: "ab 250,00 €" oder "100 Euro"
             min_m = re.search(
-                r"(?:ab\s+)?(\d[\d.,]*)\s*(?:€|Euro)",
+                r"(?:Mindest\w*\s+)?ab\s+(\d[\d.,]*)\s*(?:€|Euro)",
                 text, re.IGNORECASE
             )
             min_anlage = None
@@ -757,6 +780,8 @@ def scrape_bettervest(session: requests.Session) -> list[dict]:
             except Exception as e:
                 logger.warning("Bettervest Parse-Fehler: %s", e)
                 continue
+        if not results:
+            logger.warning("Bettervest: Real-data-Zweig aktiv, aber keine qualifizierenden Projekte gefunden.")
     else:
         # Site only shows placeholder text or requires login for real listings
         logger.warning(
@@ -836,6 +861,8 @@ def scrape_exporo(session: requests.Session) -> list[dict]:
             except Exception as e:
                 logger.warning("Exporo Parse-Fehler: %s", e)
                 continue
+        if not results:
+            logger.warning("Exporo: Real-data-Zweig aktiv, aber keine qualifizierenden Projekte gefunden.")
     else:
         logger.warning(
             "Exporo: Nur Platzhalter-Daten im HTML sichtbar "
