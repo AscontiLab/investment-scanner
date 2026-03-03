@@ -254,7 +254,7 @@ def scrape_dga(session: requests.Session) -> list[dict]:
     # East-German region identifiers as used in the filter.region field
     east_regions = {
         "berlin", "brandenburg", "mecklenburg-vorpommern",
-        "sachsen", "sachsen-anhalt", "thüringen",
+        "sachsen", "sachsen-anhalt",
     }
 
     results = []
@@ -351,12 +351,11 @@ def scrape_zvg(session: requests.Session) -> list[dict]:
     """
     # land_abk codes for east German states
     bundeslaender = {
-        "Berlin":               "be",
-        "Brandenburg":          "br",
-        "Mecklenburg-VP":       "mv",
-        "Sachsen":              "sn",
-        "Sachsen-Anhalt":       "st",
-        "Thüringen":            "th",
+        "Berlin":          "be",
+        "Brandenburg":     "br",
+        "Mecklenburg-VP":  "mv",
+        "Sachsen":         "sn",
+        "Sachsen-Anhalt":  "st",
     }
 
     results = []
