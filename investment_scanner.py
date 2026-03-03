@@ -521,5 +521,341 @@ def scrape_zvg(session: requests.Session) -> list[dict]:
     return results
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# SCRAPER: CROWDFUNDING / BETEILIGUNGEN
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _parse_rendite(text: str | None) -> float | None:
+    """Extrahiert Rendite-Prozentsatz aus Text wie '6,5 % p.a.' oder '6.5%'."""
+    if not text:
+        return None
+    m = re.search(r"(\d+[.,]\d+|\d+)\s*%", text)
+    if m:
+        return float(m.group(1).replace(",", "."))
+    return None
+
+
+def scrape_bergfuerst(session: requests.Session) -> list[dict]:
+    """
+    Scrapet aktive Immobilien-Crowdinvestments von Bergfürst.
+
+    Die Seite /investitionsmoeglichkeiten enthält Projekt-Karten als
+    .panel-investment divs mit data-href-Attribut. Aktive Angebote
+    erkennt man am Ribbon-Text 'Jetzt zeichnen'.
+    """
+    url = "https://www.bergfuerst.com/investitionsmoeglichkeiten"
+    logger.info("Bergfürst: %s", url)
+    r = safe_get(session, url)
+    if r is None:
+        logger.warning("Bergfürst nicht erreichbar")
+        return []
+
+    soup = BeautifulSoup(r.text, "html.parser")
+    cards = soup.select(".panel-investment")
+    if not cards:
+        logger.warning("Bergfürst: keine .panel-investment-Karten gefunden (Struktur geändert?)")
+        return []
+
+    results = []
+    for card in cards:
+        try:
+            ribbon_el = card.select_one(".tile-ribbon-container")
+            ribbon    = ribbon_el.get_text(strip=True) if ribbon_el else ""
+
+            # Nur aktive Angebote (kein Gold-Plan, kein Zurückgezahlt)
+            if "Jetzt zeichnen" not in ribbon:
+                continue
+
+            title_el = card.select_one(".tile-title")
+            loc_el   = card.select_one(".tile-location")
+            if not title_el:
+                continue
+
+            titel = title_el.get_text(strip=True)
+            ort   = loc_el.get_text(strip=True) if loc_el else ""
+
+            text  = card.get_text(" ", strip=True)
+            rendite = _parse_rendite(text)
+            if rendite is None:
+                continue
+            if rendite < MIN_RENDITE:
+                logger.info("Bergfürst skip (rendite %.2f%% < %.1f%%): %s", rendite, MIN_RENDITE, titel)
+                continue
+
+            months_m = re.search(r"(\d+)\s*Monate", text)
+            laufzeit = f"{months_m.group(1)} Monate" if months_m else ""
+
+            data_href = card.get("data-href", "")
+            link = ("https://www.bergfuerst.com" + data_href) if data_href else url
+
+            results.append({
+                "kategorie":     "Beteiligung",
+                "plattform":     "Bergfürst",
+                "titel":         titel,
+                "typ":           "Immobilien",
+                "rendite_pct":   rendite,
+                "laufzeit":      laufzeit,
+                "min_anlage_eur": None,
+                "status":        "aktiv",
+                "link":          link,
+            })
+        except Exception as e:
+            logger.warning("Bergfürst Parse-Fehler: %s", e)
+            continue
+
+    logger.info("-> %d Bergfürst-Angebote nach Filter", len(results))
+    return results
+
+
+def scrape_wiwin(session: requests.Session) -> list[dict]:
+    """
+    Scrapet aktive Crowdinvestments von Wiwin (wiwin.de/crowdinvesting).
+
+    Die Seite ist WordPress/WP Bakery. Projekt-Karten sind .wpb_wrapper-Divs
+    mit einer .kq-product-v3-horizontal-title-Klasse als Titel. Jede Karte
+    enthält Verzinsung, Laufzeit, Mindestanlage und einen 'Mehr erfahren'-Link.
+    """
+    url = "https://wiwin.de/crowdinvesting"
+    logger.info("Wiwin: %s", url)
+    r = safe_get(session, url)
+    if r is None:
+        logger.warning("Wiwin nicht erreichbar")
+        return []
+
+    soup = BeautifulSoup(r.text, "html.parser")
+    raw_cards = soup.select(".wpb_wrapper")
+    if not raw_cards:
+        logger.warning("Wiwin: keine .wpb_wrapper-Karten gefunden (Struktur geändert?)")
+        return []
+
+    results = []
+    seen: set[str] = set()
+
+    for card in raw_cards:
+        try:
+            title_el = card.select_one(".kq-product-v3-horizontal-title")
+            if not title_el:
+                continue
+            titel = title_el.get_text(strip=True)
+            if not titel or titel in seen:
+                continue
+            seen.add(titel)
+
+            text = card.get_text(" ", strip=True)
+
+            # Rendite aus "Verzinsung X,XX % p. a."
+            rendite_m = re.search(r"Verzinsung\s+(\d+[.,]\d+|\d+)\s*%", text)
+            rendite = float(rendite_m.group(1).replace(",", ".")) if rendite_m else _parse_rendite(text)
+            if rendite is None:
+                continue
+            if rendite < MIN_RENDITE:
+                logger.info("Wiwin skip (rendite %.2f%% < %.1f%%): %s", rendite, MIN_RENDITE, titel)
+                continue
+
+            # Laufzeit: Datum hinter "Laufzeit "
+            laufzeit_m = re.search(r"Laufzeit\s+([\d.]+)", text)
+            laufzeit = laufzeit_m.group(1) if laufzeit_m else ""
+
+            # Mindestanlage: "ab 250,00 €" oder "100 Euro"
+            min_m = re.search(
+                r"(?:ab\s+)?(\d[\d.,]*)\s*(?:€|Euro)",
+                text, re.IGNORECASE
+            )
+            min_anlage = None
+            if min_m:
+                raw_min = min_m.group(1).replace(".", "").replace(",", ".")
+                try:
+                    min_anlage = int(float(raw_min))
+                except ValueError:
+                    pass
+
+            a_el = card.find("a", href=True)
+            link = a_el["href"] if a_el else url
+
+            # Typ aus Titel (nicht vollem Karten-Text, um Spill-over zu vermeiden):
+            # Wind/Solar → Energie, Wohnen/Immobil → Immobilien, sonst allgemein
+            low_title = titel.lower()
+            if any(k in low_title for k in ["wind", "solar", "energie", "erneuerbar", "repowering"]):
+                typ = "Erneuerbare Energien"
+            elif any(k in low_title for k in ["immobil", "wohnen", "wohn"]):
+                typ = "Immobilien"
+            else:
+                typ = "Crowdinvesting"
+
+            results.append({
+                "kategorie":     "Beteiligung",
+                "plattform":     "Wiwin",
+                "titel":         titel,
+                "typ":           typ,
+                "rendite_pct":   rendite,
+                "laufzeit":      laufzeit,
+                "min_anlage_eur": min_anlage,
+                "status":        "aktiv",
+                "link":          link,
+            })
+        except Exception as e:
+            logger.warning("Wiwin Parse-Fehler: %s", e)
+            continue
+
+    logger.info("-> %d Wiwin-Angebote nach Filter", len(results))
+    return results
+
+
+def scrape_bettervest(session: requests.Session) -> list[dict]:
+    """
+    Scrapet Crowdinvestments von Bettervest (bettervest.com/de/projekte/).
+
+    Die Seite ist WordPress/Elementor. Zum Zeitpunkt der Implementierung
+    zeigt die Projektliste nur Platzhalter-Texte ('Platzhalter Projekt 1 …').
+    Echte Projekte werden via Login/JavaScript nachgeladen.
+    Fallback: Plattform-Link für manuelle Prüfung.
+    """
+    url = "https://www.bettervest.com/de/projekte/"
+    logger.info("Bettervest: %s", url)
+    r = safe_get(session, url)
+    if r is None:
+        logger.warning("Bettervest nicht erreichbar")
+        return []
+
+    soup = BeautifulSoup(r.text, "html.parser")
+    body_text = soup.get_text(" ", strip=True)
+
+    results = []
+    # Check whether real project data is present (i.e. rendite percentages
+    # appear alongside real names, not placeholder text)
+    has_real_projects = (
+        re.search(r"\d+[.,]\d+\s*%", body_text)
+        and "Platzhalter" not in body_text
+    )
+
+    if has_real_projects:
+        # Future-proof: try to parse project cards if the site ever returns
+        # real HTML listings. For now this branch is not reached.
+        cards = soup.select(".elementor-widget-container")
+        for card in cards:
+            try:
+                text = card.get_text(" ", strip=True)
+                rendite = _parse_rendite(text)
+                if rendite is None or rendite < MIN_RENDITE:
+                    continue
+                titel = (card.find("h2") or card.find("h3") or card.find("h4"))
+                titel = titel.get_text(strip=True) if titel else "Bettervest Projekt"
+                a_el  = card.find("a", href=True)
+                link  = a_el["href"] if a_el else url
+                months_m = re.search(r"(\d+)\s*(?:Monate|Monat)\b", text)
+                results.append({
+                    "kategorie":     "Beteiligung",
+                    "plattform":     "Bettervest",
+                    "titel":         titel,
+                    "typ":           "PV/Energie",
+                    "rendite_pct":   rendite,
+                    "laufzeit":      f"{months_m.group(1)} Monate" if months_m else "",
+                    "min_anlage_eur": None,
+                    "status":        "aktiv",
+                    "link":          link,
+                })
+            except Exception as e:
+                logger.warning("Bettervest Parse-Fehler: %s", e)
+                continue
+    else:
+        # Site only shows placeholder text or requires login for real listings
+        logger.warning(
+            "Bettervest: Nur Platzhalter-Projekte sichtbar "
+            "(Login erforderlich oder keine aktiven Projekte). Fallback-Eintrag."
+        )
+        results.append({
+            "kategorie":     "Beteiligung",
+            "plattform":     "Bettervest",
+            "titel":         "Manuelle Prüfung empfohlen (JS/Login-Rendering)",
+            "typ":           "PV/Energie",
+            "rendite_pct":   None,
+            "laufzeit":      "",
+            "min_anlage_eur": None,
+            "status":        "prüfen",
+            "link":          url,
+        })
+
+    logger.info("-> %d Bettervest-Angebote (inkl. Fallback)", len(results))
+    return results
+
+
+def scrape_exporo(session: requests.Session) -> list[dict]:
+    """
+    Scrapet Crowdinvestments von Exporo (exporo.de/immobilien).
+
+    Exporo nutzt Webflow als CMS. Die Projekt-Karten werden im statischen HTML
+    mit Platzhalter-Werten ('Projekt Standort', '8,0 %', 'Name des Entwicklers')
+    ausgeliefert; echte Projekte erscheinen nur nach Login oder via
+    JavaScript-Nachladen aus dem Exporo-App-Backend (app.exporo.de).
+    Fallback: Link zur Invest-Übersicht für manuelle Prüfung.
+    """
+    url = "https://exporo.de/immobilien"
+    app_url = "https://app.exporo.de"
+    logger.info("Exporo: %s", url)
+    r = safe_get(session, url)
+    if r is None:
+        logger.warning("Exporo nicht erreichbar")
+        return []
+
+    soup = BeautifulSoup(r.text, "html.parser")
+    body_text = soup.get_text(" ", strip=True)
+
+    results = []
+    # Detect real vs placeholder content:
+    # Placeholder cards always contain literal "Name des Entwicklers"
+    placeholder_marker = "Name des Entwicklers"
+    has_real_projects = (
+        re.search(r"\d+[.,]\d+\s*%", body_text)
+        and placeholder_marker not in body_text
+    )
+
+    if has_real_projects:
+        # Future-proof: parse Webflow CMS cards if real HTML is ever served
+        for card in soup.select("[class*='c-project']"):
+            try:
+                text = card.get_text(" ", strip=True)
+                rendite = _parse_rendite(text)
+                if rendite is None or rendite < MIN_RENDITE:
+                    continue
+                titel_el = card.select_one("[class*='title'], h2, h3")
+                titel = titel_el.get_text(strip=True) if titel_el else "Exporo Projekt"
+                a_el  = card.find("a", href=True)
+                link  = a_el["href"] if a_el else app_url
+                laufzeit_m = re.search(r"(\d+)\s*(?:Monate|Monat)\b", text)
+                results.append({
+                    "kategorie":     "Beteiligung",
+                    "plattform":     "Exporo",
+                    "titel":         titel,
+                    "typ":           "Immobilien",
+                    "rendite_pct":   rendite,
+                    "laufzeit":      f"{laufzeit_m.group(1)} Monate" if laufzeit_m else "",
+                    "min_anlage_eur": None,
+                    "status":        "aktiv",
+                    "link":          link,
+                })
+            except Exception as e:
+                logger.warning("Exporo Parse-Fehler: %s", e)
+                continue
+    else:
+        logger.warning(
+            "Exporo: Nur Platzhalter-Daten im HTML sichtbar "
+            "(Webflow/JS-Rendering, Login erforderlich). Fallback-Eintrag."
+        )
+        results.append({
+            "kategorie":     "Beteiligung",
+            "plattform":     "Exporo",
+            "titel":         "Manuelle Prüfung empfohlen (JS/Login-Rendering)",
+            "typ":           "Immobilien",
+            "rendite_pct":   None,
+            "laufzeit":      "",
+            "min_anlage_eur": None,
+            "status":        "prüfen",
+            "link":          app_url,
+        })
+
+    logger.info("-> %d Exporo-Angebote (inkl. Fallback)", len(results))
+    return results
+
+
 if __name__ == "__main__":
     print("Investment Scanner — Skeleton OK")
