@@ -9,6 +9,7 @@ Quellen Crowdfunding: Bettervest, Bergfürst, Wiwin, Exporo
 """
 
 import csv
+import json
 import re
 import time
 import logging
@@ -246,7 +247,7 @@ def scrape_dga(session: requests.Session) -> list[dict]:
         return []
 
     try:
-        locations = __import__("json").loads(m.group(1))
+        locations = json.loads(m.group(1))
     except Exception as e:
         logger.warning("DGA-AG JSON-Parse-Fehler: %s", e)
         return []
@@ -277,6 +278,8 @@ def scrape_dga(session: requests.Session) -> list[dict]:
             iw_soup = BeautifulSoup(entry.get("infoWindow", ""), "html.parser")
             title   = iw_soup.find("h2")
             title   = title.get_text(strip=True)[:120] if title else ""
+            if not title:
+                continue
             a_el    = iw_soup.find("a", href=True)
             href    = a_el["href"] if a_el else ""
             if href and not href.startswith("http"):
@@ -358,14 +361,56 @@ def scrape_zvg(session: requests.Session) -> list[dict]:
         "Sachsen-Anhalt":  "st",
     }
 
+    def _flush(cur: dict, land_name: str) -> dict | None:
+        """Turn accumulated ZVG row data into a result dict, or None if over budget."""
+        price = cur.get("price")
+        title = cur.get("title", f"ZVG {land_name}")
+        ort   = cur.get("ort", land_name)
+        href  = cur.get("href", "")
+        text  = title + " " + ort
+
+        if price is not None and int(price) > MAX_PRICE:
+            return None
+
+        flaeche = None
+        ha_match = re.search(r"(\d[\d.,]*)\s*ha\b", text, re.IGNORECASE)
+        if ha_match:
+            raw = ha_match.group(1)
+            if "," in raw:
+                raw = raw.replace(".", "").replace(",", ".")
+            elif re.search(r"\.\d{3}$", raw):
+                raw = raw.replace(".", "")
+            flaeche = int(float(raw) * 10_000)
+        else:
+            area_match = _AREA_RE.search(text)
+            if area_match:
+                raw_m2 = area_match.group(1)
+                if "," in raw_m2:
+                    raw_m2 = raw_m2.replace(".", "").replace(",", ".")
+                elif re.search(r"\.\d{3}$", raw_m2):
+                    raw_m2 = raw_m2.replace(".", "")
+                flaeche = int(float(raw_m2))
+
+        return {
+            "kategorie":  "Grundstück",
+            "quelle":     "Zwangsversteigerung",
+            "titel":      title[:120],
+            "ort":        ort,
+            "flaeche_m2": flaeche,
+            "preis_eur":  price,
+            "eur_pro_m2": round(price / flaeche, 2) if price and flaeche else None,
+            "nutzung":    nutzungsidee(title, flaeche),
+            "link":       href,
+        }
+
+    zvg_url = "https://www.zvg-portal.de/index.php?button=Suchen"
     results = []
 
     for land, code in bundeslaender.items():
-        url = f"https://www.zvg-portal.de/index.php?button=Suchen"
         logger.info("ZVG %s: POST land_abk=%s", land, code)
         try:
             resp = session.post(
-                url,
+                zvg_url,
                 data={
                     "land_abk": code,
                     "ger_name": "",
@@ -403,48 +448,6 @@ def scrape_zvg(session: requests.Session) -> list[dict]:
 
         # State machine: accumulate fields across rows until we have a complete entry
         current: dict = {}
-
-        def _flush(cur: dict, land_name: str) -> dict | None:
-            """Turn accumulated row data into a result dict or None if invalid."""
-            price   = cur.get("price")
-            title   = cur.get("title", f"ZVG {land_name}")
-            ort     = cur.get("ort", land_name)
-            href    = cur.get("href", "")
-            text    = title + " " + ort
-
-            if price is not None and int(price) > MAX_PRICE:
-                return None
-
-            flaeche = None
-            ha_match = re.search(r"(\d[\d.,]*)\s*ha\b", text, re.IGNORECASE)
-            if ha_match:
-                raw = ha_match.group(1)
-                if "," in raw:
-                    raw = raw.replace(".", "").replace(",", ".")
-                elif re.search(r"\.\d{3}$", raw):
-                    raw = raw.replace(".", "")
-                flaeche = int(float(raw) * 10_000)
-            else:
-                area_match = _AREA_RE.search(text)
-                if area_match:
-                    raw_m2 = area_match.group(1)
-                    if "," in raw_m2:
-                        raw_m2 = raw_m2.replace(".", "").replace(",", ".")
-                    elif re.search(r"\.\d{3}$", raw_m2):
-                        raw_m2 = raw_m2.replace(".", "")
-                    flaeche = int(float(raw_m2))
-
-            return {
-                "kategorie":  "Grundstück",
-                "quelle":     "Zwangsversteigerung",
-                "titel":      title[:120],
-                "ort":        ort,
-                "flaeche_m2": flaeche,
-                "preis_eur":  price,
-                "eur_pro_m2": round(price / flaeche, 2) if price and flaeche else None,
-                "nutzung":    nutzungsidee(title, flaeche),
-                "link":       href,
-            }
 
         for row in rows:
             try:
@@ -486,15 +489,17 @@ def scrape_zvg(session: requests.Session) -> list[dict]:
 
                 # Verkehrswert row: extract numeric price
                 if "Verkehrswert" in row_text:
-                    # Find the first numeric price in the cell
-                    # Format examples: "10.800,00 €" or "lfd. Nr. 2 - 45.000,00"
+                    # Handles: "10.800,00 €", "45.000,-", "45000 EUR", "45.000"
                     price_match = re.search(
-                        r"(\d[\d.]*,\d{2})", row_text
+                        r"(\d[\d.]*(?:,\d{1,2})?)\s*(?:EUR|€|-\s|$)", row_text
                     )
                     if price_match:
                         raw_price = price_match.group(1)
-                        # German decimal: "10.800,00" → 10800
-                        raw_price = raw_price.replace(".", "").replace(",", ".")
+                        # Normalize German thousands dot + decimal comma
+                        if "," in raw_price:
+                            raw_price = raw_price.replace(".", "").replace(",", ".")
+                        elif re.search(r"\.\d{3}$", raw_price):
+                            raw_price = raw_price.replace(".", "")
                         current["price"] = int(float(raw_price))
                     continue
 
