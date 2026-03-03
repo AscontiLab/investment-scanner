@@ -224,5 +224,298 @@ def scrape_kleinanzeigen(session: requests.Session) -> list[dict]:
     return results
 
 
+def scrape_dga(session: requests.Session) -> list[dict]:
+    """
+    Scrapet Grundstück-Auktionen von Deutsche Grundstücksauktionen AG (dga-ag.de).
+
+    Die Seite bettet alle Objekte als JSON in eine JS-Variable 'var locations' ein.
+    Jeder Eintrag enthält ein 'filter'-Objekt mit region, limit, category sowie
+    ein 'infoWindow'-HTML-Schnipsel mit Titel, Adresse und Objekt-Link.
+    """
+    url = "https://www.dga-ag.de/immobilie-ersteigern/immobilie-suchen-und-finden.html"
+    logger.info("DGA-AG: %s", url)
+    r = safe_get(session, url)
+    if r is None:
+        logger.warning("DGA-AG nicht erreichbar")
+        return []
+
+    # Embedded JSON: var locations = [...];
+    m = re.search(r"var locations = (\[.*?\]);", r.text, re.DOTALL)
+    if not m:
+        logger.warning("DGA-AG: JSON 'var locations' nicht gefunden (HTML-Struktur geändert?)")
+        return []
+
+    try:
+        locations = __import__("json").loads(m.group(1))
+    except Exception as e:
+        logger.warning("DGA-AG JSON-Parse-Fehler: %s", e)
+        return []
+
+    # East-German region identifiers as used in the filter.region field
+    east_regions = {
+        "berlin", "brandenburg", "mecklenburg-vorpommern",
+        "sachsen", "sachsen-anhalt", "thüringen",
+    }
+
+    results = []
+    for entry in locations:
+        try:
+            f       = entry.get("filter", {})
+            region  = str(f.get("region", "")).lower()
+            limit   = f.get("limit")          # auction limit in EUR (int)
+            status  = str(f.get("status", "")).lower()
+
+            # Only active, in-region, within budget
+            if status not in ("aktuell", ""):
+                continue
+            if not any(r in region for r in east_regions):
+                continue
+            if limit is not None and int(limit) > MAX_PRICE:
+                continue
+
+            # Parse the infoWindow HTML snippet for title, address, link
+            iw_soup = BeautifulSoup(entry.get("infoWindow", ""), "html.parser")
+            title   = iw_soup.find("h2")
+            title   = title.get_text(strip=True)[:120] if title else ""
+            a_el    = iw_soup.find("a", href=True)
+            href    = a_el["href"] if a_el else ""
+            if href and not href.startswith("http"):
+                href = "https://www.dga-ag.de" + href
+
+            # Address: first <p> tags in .gmap-text hold street and city
+            gmap_text = iw_soup.select_one(".gmap-text")
+            ort = ""
+            if gmap_text:
+                paras = gmap_text.find_all("p")
+                ort   = " ".join(p.get_text(strip=True) for p in paras[:2])
+
+            # Full text for area extraction
+            full_text = title + " " + ort
+
+            flaeche = None
+            ha_match = re.search(r"(\d[\d.,]*)\s*ha\b", full_text, re.IGNORECASE)
+            if ha_match:
+                raw = ha_match.group(1)
+                if "," in raw:
+                    raw = raw.replace(".", "").replace(",", ".")
+                elif re.search(r"\.\d{3}$", raw):
+                    raw = raw.replace(".", "")
+                flaeche = int(float(raw) * 10_000)
+            else:
+                area_match = _AREA_RE.search(full_text)
+                if area_match:
+                    raw_m2 = area_match.group(1)
+                    if "," in raw_m2:
+                        raw_m2 = raw_m2.replace(".", "").replace(",", ".")
+                    elif re.search(r"\.\d{3}$", raw_m2):
+                        raw_m2 = raw_m2.replace(".", "")
+                    flaeche = int(float(raw_m2))
+
+            price = int(limit) if limit is not None else None
+
+            results.append({
+                "kategorie":  "Grundstück",
+                "quelle":     "DGA Auktion",
+                "titel":      title,
+                "ort":        ort,
+                "flaeche_m2": flaeche,
+                "preis_eur":  price,
+                "eur_pro_m2": round(price / flaeche, 2) if price and flaeche else None,
+                "nutzung":    nutzungsidee(title, flaeche),
+                "link":       href or url,
+            })
+        except Exception as e:
+            logger.warning("DGA-AG Parse-Fehler: %s", e)
+            continue
+
+    logger.info("-> %d DGA-Auktionen nach Filter", len(results))
+    return results
+
+
+def scrape_zvg(session: requests.Session) -> list[dict]:
+    """
+    Scrapet Zwangsversteigerungstermine vom amtlichen ZVG-Portal (zvg-portal.de).
+
+    Das Portal liefert pro Bundesland eine HTML-Seite mit einem border=0-Table.
+    Jeder Verfahrenseintrag besteht aus mehreren <TR>-Zeilen:
+      - Aktenzeichen-Zeile (enthält Link zur Detailansicht)
+      - Amtsgericht-Zeile
+      - Objekt/Lage-Zeile (Typ + Adresse)
+      - Verkehrswert-Zeile (Preis in €)
+      - Termin-Zeile
+      - Bekanntmachungs-PDF-Zeile
+      - Leere Trennzeile
+
+    Wir iterieren über alle <TR>, sammeln Kontext pro Verfahren und
+    schreiben einen Eintrag, sobald wir einen Verkehrswert gefunden haben.
+    """
+    # land_abk codes for east German states
+    bundeslaender = {
+        "Berlin":               "be",
+        "Brandenburg":          "br",
+        "Mecklenburg-VP":       "mv",
+        "Sachsen":              "sn",
+        "Sachsen-Anhalt":       "st",
+        "Thüringen":            "th",
+    }
+
+    results = []
+
+    for land, code in bundeslaender.items():
+        url = f"https://www.zvg-portal.de/index.php?button=Suchen"
+        logger.info("ZVG %s: POST land_abk=%s", land, code)
+        try:
+            resp = session.post(
+                url,
+                data={
+                    "land_abk": code,
+                    "ger_name": "",
+                    "ger_id":   "0",
+                    "order_by": "2",
+                    "obj_liste": "",
+                    "obj_arr":   "",
+                },
+                timeout=20,
+            )
+            resp.raise_for_status()
+        except Exception as e:
+            logger.warning("ZVG %s nicht erreichbar: %s", land, e)
+            time.sleep(PAUSE_S)
+            continue
+
+        # The portal uses ISO-8859-1 encoding
+        content = resp.content.decode("latin-1")
+        soup    = BeautifulSoup(content, "html.parser")
+
+        # The main data table has border=0 (the border=1 tables are pagination widgets)
+        data_table = None
+        for t in soup.find_all("table"):
+            if t.get("border") == "0":
+                data_table = t
+                break
+
+        if data_table is None:
+            logger.warning("ZVG %s: Datentabelle nicht gefunden", land)
+            time.sleep(PAUSE_S)
+            continue
+
+        rows = data_table.find_all("tr")
+        land_count = 0
+
+        # State machine: accumulate fields across rows until we have a complete entry
+        current: dict = {}
+
+        def _flush(cur: dict, land_name: str) -> dict | None:
+            """Turn accumulated row data into a result dict or None if invalid."""
+            price   = cur.get("price")
+            title   = cur.get("title", f"ZVG {land_name}")
+            ort     = cur.get("ort", land_name)
+            href    = cur.get("href", "")
+            text    = title + " " + ort
+
+            if price is not None and int(price) > MAX_PRICE:
+                return None
+
+            flaeche = None
+            ha_match = re.search(r"(\d[\d.,]*)\s*ha\b", text, re.IGNORECASE)
+            if ha_match:
+                raw = ha_match.group(1)
+                if "," in raw:
+                    raw = raw.replace(".", "").replace(",", ".")
+                elif re.search(r"\.\d{3}$", raw):
+                    raw = raw.replace(".", "")
+                flaeche = int(float(raw) * 10_000)
+            else:
+                area_match = _AREA_RE.search(text)
+                if area_match:
+                    raw_m2 = area_match.group(1)
+                    if "," in raw_m2:
+                        raw_m2 = raw_m2.replace(".", "").replace(",", ".")
+                    elif re.search(r"\.\d{3}$", raw_m2):
+                        raw_m2 = raw_m2.replace(".", "")
+                    flaeche = int(float(raw_m2))
+
+            return {
+                "kategorie":  "Grundstück",
+                "quelle":     "Zwangsversteigerung",
+                "titel":      title[:120],
+                "ort":        ort,
+                "flaeche_m2": flaeche,
+                "preis_eur":  price,
+                "eur_pro_m2": round(price / flaeche, 2) if price and flaeche else None,
+                "nutzung":    nutzungsidee(title, flaeche),
+                "link":       href,
+            }
+
+        for row in rows:
+            try:
+                row_text = row.get_text(" ", strip=True)
+
+                # Separator row (colspan=3 with only a <hr>) → flush entry
+                if not row_text or (row.find("hr") and len(row.find_all("td")) == 1):
+                    if current.get("price") is not None:
+                        rec = _flush(current, land)
+                        if rec is not None:
+                            results.append(rec)
+                            land_count += 1
+                    current = {}
+                    continue
+
+                # Aktenzeichen row: contains the detail link
+                if "Aktenzeichen" in row_text:
+                    a_el = row.find("a", href=True)
+                    if a_el:
+                        href = a_el["href"]
+                        if href and not href.startswith("http"):
+                            href = "https://www.zvg-portal.de/" + href.lstrip("/")
+                        current["href"] = href
+                    continue
+
+                # Objekt/Lage row: extract object type + address
+                if "Objekt/Lage" in row_text:
+                    tds = row.find_all("td")
+                    if len(tds) >= 2:
+                        raw = tds[1].get_text(" ", strip=True)
+                        # Format: "Typ: Adresse" – split on colon
+                        if ":" in raw:
+                            obj_type, _, addr = raw.partition(":")
+                            current["title"] = obj_type.strip()
+                            current["ort"]   = addr.strip()
+                        else:
+                            current["title"] = raw[:120]
+                    continue
+
+                # Verkehrswert row: extract numeric price
+                if "Verkehrswert" in row_text:
+                    # Find the first numeric price in the cell
+                    # Format examples: "10.800,00 €" or "lfd. Nr. 2 - 45.000,00"
+                    price_match = re.search(
+                        r"(\d[\d.]*,\d{2})", row_text
+                    )
+                    if price_match:
+                        raw_price = price_match.group(1)
+                        # German decimal: "10.800,00" → 10800
+                        raw_price = raw_price.replace(".", "").replace(",", ".")
+                        current["price"] = int(float(raw_price))
+                    continue
+
+            except Exception as e:
+                logger.warning("ZVG %s Parse-Fehler: %s", land, e)
+                continue
+
+        # Flush last entry if table ended without a separator
+        if current.get("price") is not None:
+            rec = _flush(current, land)
+            if rec is not None:
+                results.append(rec)
+                land_count += 1
+
+        logger.info("ZVG %s: %d Einträge nach Filter", land, land_count)
+        time.sleep(PAUSE_S)
+
+    logger.info("-> %d ZVG-Einträge gesamt nach Filter", len(results))
+    return results
+
+
 if __name__ == "__main__":
     print("Investment Scanner — Skeleton OK")
