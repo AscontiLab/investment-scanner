@@ -177,9 +177,16 @@ def scrape_kleinanzeigen(session: requests.Session) -> list[dict]:
                     r"(\d[\d.,]*)\s*ha\b", title + " " + desc_raw, re.IGNORECASE
                 )
                 if ha_match:
-                    flaeche = int(
-                        ha_match.group(1).replace(".", "").replace(",", "")
-                    ) * 10_000
+                    raw = ha_match.group(1)
+                    # Normalize German number formats to float:
+                    # "1,5" (comma=decimal) → 1.5
+                    # "1.500" (dot=thousands sep, 3 trailing digits) → 1500.0
+                    # "2.5" (dot=decimal, <3 trailing digits) → 2.5
+                    if "," in raw:
+                        raw = raw.replace(".", "").replace(",", ".")
+                    elif re.search(r"\.\d{3}$", raw):
+                        raw = raw.replace(".", "")
+                    flaeche = int(float(raw) * 10_000)
                 else:
                     area_match = _AREA_RE.search(title + " " + desc_raw)
                     if area_match:
