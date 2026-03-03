@@ -884,5 +884,151 @@ def scrape_exporo(session: requests.Session) -> list[dict]:
     return results
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# HTML REPORT
+# ═══════════════════════════════════════════════════════════════════════════════
+
+CSS = """
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+       background:#f4f7fb; margin:0; padding:20px; color:#1a1a2e; }
+h1   { color:#1a3a6e; border-bottom:2px solid #c8d8f0; padding-bottom:10px; }
+h2   { color:#1a56a0; margin-top:28px; }
+.summary { display:flex; gap:14px; flex-wrap:wrap; margin:18px 0; }
+.card { background:#f0f5ff; border:1px solid #c8d8f0; border-radius:8px;
+        padding:14px 22px; min-width:130px; }
+.card .val { font-size:1.9em; font-weight:700; color:#1a56a0; }
+.card .lbl { color:#555577; font-size:0.8em; margin-top:2px; }
+table { width:100%; border-collapse:collapse; background:#ffffff;
+        border:1px solid #dde3ed; border-radius:8px; overflow:hidden; margin:14px 0; }
+th  { background:#eef2fa; padding:9px 12px; text-align:left;
+      color:#444466; font-size:0.82em; border-bottom:1px solid #dde3ed; }
+td  { padding:8px 12px; border-bottom:1px solid #eef2fa; font-size:0.88em; color:#1a1a2e; }
+tr:last-child td { border-bottom:none; }
+tr:hover td { background:#f5f8ff; }
+.tag  { background:#1a56a0; color:#fff; border-radius:4px;
+        padding:2px 7px; font-size:0.75em; }
+.tag2 { background:#1a7a30; color:#fff; border-radius:4px;
+        padding:2px 7px; font-size:0.75em; }
+.tag3 { background:#e07000; color:#fff; border-radius:4px;
+        padding:2px 7px; font-size:0.75em; }
+.warn { background:#fff8e8; border-left:3px solid #e09000; padding:10px 14px;
+        color:#664400; font-size:0.82em; border-radius:0 6px 6px 0; margin:8px 0; }
+.empty { color:#777799; padding:18px; text-align:center;
+         background:#f7f9ff; border:1px solid #dde3ed; border-radius:8px; }
+a    { color:#1a56a0; text-decoration:none; }
+a:hover { text-decoration:underline; }
+.footer { color:#777799; font-size:0.78em; margin-top:30px;
+          border-top:1px solid #dde3ed; padding-top:14px; }
+"""
+
+
+def _quelle_tag(quelle: str) -> str:
+    tags = {
+        "Kleinanzeigen":       "tag",
+        "DGA Auktion":         "tag2",
+        "Zwangsversteigerung": "tag3",
+    }
+    css = tags.get(quelle, "tag")
+    return f'<span class="{css}">{quelle}</span>'
+
+
+def _plattform_tag(plattform: str) -> str:
+    return f'<span class="tag">{plattform}</span>'
+
+
+def build_grundstuecke_table(items: list[dict]) -> str:
+    if not items:
+        return '<div class="empty">Keine Grundstücke gefunden.</div>'
+    headers = ["Quelle", "Titel", "Ort", "Fläche", "Preis", "€/m²", "Nutzungsidee", "Link"]
+    rows = ""
+    for b in sorted(items, key=lambda x: x.get("preis_eur") or 999_999):
+        flaeche = f"{b['flaeche_m2']:,} m²".replace(",", ".") if b.get("flaeche_m2") else "–"
+        preis   = f"{b['preis_eur']:,} €".replace(",", ".") if b.get("preis_eur") else "–"
+        epm2    = f"{b['eur_pro_m2']:.1f}" if b.get("eur_pro_m2") else "–"
+        rows += f"""<tr>
+          <td>{_quelle_tag(b['quelle'])}</td>
+          <td><strong>{b['titel'][:80]}</strong></td>
+          <td>{b.get('ort', '–')}</td>
+          <td>{flaeche}</td>
+          <td>{preis}</td>
+          <td>{epm2}</td>
+          <td style="color:#555577;font-size:0.82em">{b.get('nutzung', '–')}</td>
+          <td><a href="{b['link']}" target="_blank">→ Inserat</a></td>
+        </tr>"""
+    ths = "".join(f"<th>{h}</th>" for h in headers)
+    return f"<table><tr>{ths}</tr>{rows}</table>"
+
+
+def build_beteiligungen_table(items: list[dict]) -> str:
+    if not items:
+        return '<div class="empty">Keine Beteiligungen gefunden.</div>'
+    headers = ["Plattform", "Projekt", "Typ", "Rendite p.a.", "Laufzeit", "Mind. Anlage", "Status", "Link"]
+    rows = ""
+    for b in sorted(items, key=lambda x: -(x.get("rendite_pct") or 0)):
+        rendite    = f"{b['rendite_pct']:.1f} %" if b.get("rendite_pct") else "–"
+        min_anlage = f"{b['min_anlage_eur']:,} €".replace(",", ".") if b.get("min_anlage_eur") else "–"
+        rows += f"""<tr>
+          <td>{_plattform_tag(b['plattform'])}</td>
+          <td><strong>{b['titel'][:80]}</strong></td>
+          <td>{b.get('typ', '–')}</td>
+          <td style="color:#1a7a30;font-weight:700">{rendite}</td>
+          <td>{b.get('laufzeit', '–')}</td>
+          <td>{min_anlage}</td>
+          <td>{b.get('status', '–')}</td>
+          <td><a href="{b['link']}" target="_blank">→ Projekt</a></td>
+        </tr>"""
+    ths = "".join(f"<th>{h}</th>" for h in headers)
+    return f"<table><tr>{ths}</tr>{rows}</table>"
+
+
+def generate_html(grundstuecke: list[dict], beteiligungen: list[dict],
+                  warnings: list[str]) -> str:
+    date_str  = datetime.now().strftime("%d.%m.%Y")
+    timestamp = datetime.now().strftime("%d.%m.%Y %H:%M")
+
+    preise_m2 = [b["eur_pro_m2"] for b in grundstuecke if b.get("eur_pro_m2")]
+    avg_epm2  = f"{sum(preise_m2)/len(preise_m2):.0f} €/m²" if preise_m2 else "–"
+
+    renditen  = [b["rendite_pct"] for b in beteiligungen if b.get("rendite_pct")]
+    best_rend = f"{max(renditen):.1f} %" if renditen else "–"
+
+    warn_html = "".join(f'<div class="warn">⚠️ {w}</div>' for w in warnings)
+
+    max_price_fmt = f"{MAX_PRICE:,}".replace(",", ".")
+
+    return f"""<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<title>Investment Scanner {date_str}</title>
+<style>{CSS}</style>
+</head>
+<body>
+<h1>💼 Investment Scanner — {date_str}</h1>
+
+<div class="summary">
+  <div class="card"><div class="val">{len(grundstuecke)}</div><div class="lbl">🏡 Grundstücke</div></div>
+  <div class="card"><div class="val">{len(beteiligungen)}</div><div class="lbl">💰 Beteiligungen</div></div>
+  <div class="card"><div class="val">{avg_epm2}</div><div class="lbl">Ø €/m²</div></div>
+  <div class="card"><div class="val">{best_rend}</div><div class="lbl">Beste Rendite</div></div>
+</div>
+
+{warn_html}
+
+<h2>🏡 Grundstücke (max. {max_price_fmt} €)</h2>
+{build_grundstuecke_table(grundstuecke)}
+
+<h2>💰 Beteiligungen & Crowdfunding (min. {MIN_RENDITE} % p.a.)</h2>
+{build_beteiligungen_table(beteiligungen)}
+
+<div class="footer">
+  Generiert: {timestamp} &nbsp;|&nbsp;
+  Quellen: Kleinanzeigen.de · DGA · ZVG-Portal · Bergfürst · Wiwin · Bettervest · Exporo<br>
+  ⚠️ Diese Übersicht dient ausschließlich zu Informationszwecken. Keine Anlageberatung.
+</div>
+</body>
+</html>"""
+
+
 if __name__ == "__main__":
     print("Investment Scanner — Skeleton OK")
