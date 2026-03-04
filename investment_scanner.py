@@ -1042,5 +1042,105 @@ def generate_html(grundstuecke: list[dict], beteiligungen: list[dict],
 </html>"""
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# MAIN
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def main() -> int:
+    print("=" * 60)
+    print(f"  Investment Scanner — {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+    print("=" * 60)
+
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    out_dir  = OUTPUT_DIR / date_str
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    session  = make_session()
+    warnings = []
+
+    # ── GRUNDSTÜCKE ─────────────────────────────────────────────────────────
+    logger.info("=== Grundstücke ===")
+    grundstuecke = []
+
+    r = scrape_kleinanzeigen(session)
+    grundstuecke.extend(r)
+    if not r:
+        warnings.append("Kleinanzeigen: keine Ergebnisse (Selektoren prüfen)")
+    time.sleep(PAUSE_S)
+
+    r = scrape_dga(session)
+    grundstuecke.extend(r)
+    if not r:
+        warnings.append("DGA: keine Ergebnisse")
+    time.sleep(PAUSE_S)
+
+    r = scrape_zvg(session)
+    grundstuecke.extend(r)
+    if not r:
+        warnings.append("ZVG-Portal: keine Ergebnisse")
+    time.sleep(PAUSE_S)
+
+    # ── BETEILIGUNGEN ───────────────────────────────────────────────────────
+    logger.info("=== Beteiligungen ===")
+    beteiligungen = []
+
+    for fn, name in [
+        (scrape_bettervest, "Bettervest"),
+        (scrape_bergfuerst, "Bergfürst"),
+        (scrape_wiwin,      "Wiwin"),
+        (scrape_exporo,     "Exporo"),
+    ]:
+        r = fn(session)
+        beteiligungen.extend(r)
+        time.sleep(PAUSE_S)
+
+    # ── REPORT ──────────────────────────────────────────────────────────────
+    logger.info("Grundstücke: %d | Beteiligungen: %d", len(grundstuecke), len(beteiligungen))
+
+    html      = generate_html(grundstuecke, beteiligungen, warnings)
+    html_path = out_dir / "investments.html"
+    html_path.write_text(html, encoding="utf-8")
+    logger.info("HTML: %s", html_path)
+
+    # ── CSV ─────────────────────────────────────────────────────────────────
+    rows = []
+    for b in grundstuecke:
+        rows.append({
+            "Kategorie": "Grundstück",
+            "Quelle":    b.get("quelle", ""),
+            "Titel":     b.get("titel", ""),
+            "Ort":       b.get("ort", ""),
+            "Fläche m²": b.get("flaeche_m2", ""),
+            "Preis €":   b.get("preis_eur", ""),
+            "€/m²":      b.get("eur_pro_m2", ""),
+            "Nutzung":   b.get("nutzung", ""),
+            "Link":      b.get("link", ""),
+        })
+    for b in beteiligungen:
+        rows.append({
+            "Kategorie":  "Beteiligung",
+            "Quelle":     b.get("plattform", ""),
+            "Titel":      b.get("titel", ""),
+            "Typ":        b.get("typ", ""),
+            "Rendite %":  b.get("rendite_pct", ""),
+            "Laufzeit":   b.get("laufzeit", ""),
+            "Mind. €":    b.get("min_anlage_eur", ""),
+            "Status":     b.get("status", ""),
+            "Link":       b.get("link", ""),
+        })
+
+    if rows:
+        csv_path   = out_dir / "investments.csv"
+        fieldnames = sorted({k for r in rows for k in r})
+        with open(csv_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(rows)
+        logger.info("CSV:  %s", csv_path)
+
+    print("\n✓ Fertig!")
+    return 0
+
+
 if __name__ == "__main__":
-    print("Investment Scanner — Skeleton OK")
+    raise SystemExit(main())
