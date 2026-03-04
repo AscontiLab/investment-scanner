@@ -28,7 +28,6 @@ logger = logging.getLogger(__name__)
 
 MAX_PRICE   = 50_000   # € Maximalpreis Grundstücke
 MIN_RENDITE = 4.0      # % p.a. Mindestrendite Crowdfunding
-REGIONS     = ["berlin", "brandenburg", "mecklenburg", "sachsen-anhalt", "sachsen"]
 
 OUTPUT_DIR  = Path(__file__).parent / "output"
 PAUSE_S     = 1.5   # Sekunden Pause zwischen Requests
@@ -44,6 +43,10 @@ HEADERS = {
 }
 
 _AREA_RE = re.compile(r"(\d[\d.]*)\s*(?:m²|m2|qm)", re.IGNORECASE)
+_REGION_RE = re.compile(
+    r"\b(?:berlin|brandenburg|mecklenburg|sachsen-anhalt|sachsen)\b",
+    re.IGNORECASE,
+)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # HILFSFUNKTIONEN
@@ -71,11 +74,8 @@ def safe_get(session: requests.Session, url: str) -> requests.Response | None:
 
 
 def in_region(text: str | None) -> bool:
-    """Prüft ob ein Ortstext zu einer der Zielregionen gehört."""
-    if not text:
-        return False
-    t = text.lower()
-    return any(r in t for r in REGIONS)
+    """Prüft ob ein Ortstext zu einer der Zielregionen gehört (Wortgrenze)."""
+    return bool(_REGION_RE.search(text or ""))
 
 
 def parse_price(text: str | None) -> int | None:
@@ -87,13 +87,32 @@ def parse_price(text: str | None) -> int | None:
 
 
 def parse_area(text: str | None) -> int | None:
-    """Extrahiert integer Fläche aus Text wie '2.500 m²' oder '2500 qm'."""
+    """Extrahiert integer Fläche aus Text. Unterstützt ha und m²/qm.
+
+    Normalisiert deutsches Zahlenformat: '1.500' → 1500, '1,5' → 1.5.
+    ha wird in m² umgerechnet (1 ha = 10.000 m²).
+    """
     if not text:
         return None
-    m = _AREA_RE.search(text)
-    if not m:
-        return None
-    return int(re.sub(r"[^\d]", "", m.group(1)))
+    # ha: try first (higher priority — "1,5 ha" is unambiguous)
+    ha_match = re.search(r"(\d[\d.,]*)\s*ha\b", text, re.IGNORECASE)
+    if ha_match:
+        raw = ha_match.group(1)
+        if "," in raw:
+            raw = raw.replace(".", "").replace(",", ".")
+        elif re.search(r"\.\d{3}$", raw):
+            raw = raw.replace(".", "")
+        return int(float(raw) * 10_000)
+    # m² / qm
+    m2_match = _AREA_RE.search(text)
+    if m2_match:
+        raw = m2_match.group(1)
+        if "," in raw:
+            raw = raw.replace(".", "").replace(",", ".")
+        elif re.search(r"\.\d{3}$", raw):
+            raw = raw.replace(".", "")
+        return int(float(raw))
+    return None
 
 
 def nutzungsidee(titel: str, flaeche_m2: int | None) -> str:
@@ -176,31 +195,7 @@ def scrape_kleinanzeigen(session: requests.Session) -> list[dict]:
                     continue
 
                 # Fläche aus Beschreibung oder Titel extrahieren
-                # ha hat keine Capture-Group in _AREA_RE → separat prüfen
-                flaeche = None
-                ha_match = re.search(
-                    r"(\d[\d.,]*)\s*ha\b", title + " " + desc_raw, re.IGNORECASE
-                )
-                if ha_match:
-                    raw = ha_match.group(1)
-                    # Normalize German number formats to float:
-                    # "1,5" (comma=decimal) → 1.5
-                    # "1.500" (dot=thousands sep, 3 trailing digits) → 1500.0
-                    # "2.5" (dot=decimal, <3 trailing digits) → 2.5
-                    if "," in raw:
-                        raw = raw.replace(".", "").replace(",", ".")
-                    elif re.search(r"\.\d{3}$", raw):
-                        raw = raw.replace(".", "")
-                    flaeche = int(float(raw) * 10_000)
-                else:
-                    area_match = _AREA_RE.search(title + " " + desc_raw)
-                    if area_match:
-                        raw_m2 = area_match.group(1)
-                        if "," in raw_m2:
-                            raw_m2 = raw_m2.replace(".", "").replace(",", ".")
-                        elif re.search(r"\.\d{3}$", raw_m2):
-                            raw_m2 = raw_m2.replace(".", "")
-                        flaeche = int(float(raw_m2))
+                flaeche = parse_area(title + " " + desc_raw)
 
                 results.append({
                     "kategorie":    "Grundstück",
@@ -296,24 +291,7 @@ def scrape_dga(session: requests.Session) -> list[dict]:
             # Full text for area extraction
             full_text = title + " " + ort
 
-            flaeche = None
-            ha_match = re.search(r"(\d[\d.,]*)\s*ha\b", full_text, re.IGNORECASE)
-            if ha_match:
-                raw = ha_match.group(1)
-                if "," in raw:
-                    raw = raw.replace(".", "").replace(",", ".")
-                elif re.search(r"\.\d{3}$", raw):
-                    raw = raw.replace(".", "")
-                flaeche = int(float(raw) * 10_000)
-            else:
-                area_match = _AREA_RE.search(full_text)
-                if area_match:
-                    raw_m2 = area_match.group(1)
-                    if "," in raw_m2:
-                        raw_m2 = raw_m2.replace(".", "").replace(",", ".")
-                    elif re.search(r"\.\d{3}$", raw_m2):
-                        raw_m2 = raw_m2.replace(".", "")
-                    flaeche = int(float(raw_m2))
+            flaeche = parse_area(full_text)
 
             price = int(limit) if limit is not None else None
 
@@ -373,24 +351,7 @@ def scrape_zvg(session: requests.Session) -> list[dict]:
         if price is not None and int(price) > MAX_PRICE:
             return None
 
-        flaeche = None
-        ha_match = re.search(r"(\d[\d.,]*)\s*ha\b", text, re.IGNORECASE)
-        if ha_match:
-            raw = ha_match.group(1)
-            if "," in raw:
-                raw = raw.replace(".", "").replace(",", ".")
-            elif re.search(r"\.\d{3}$", raw):
-                raw = raw.replace(".", "")
-            flaeche = int(float(raw) * 10_000)
-        else:
-            area_match = _AREA_RE.search(text)
-            if area_match:
-                raw_m2 = area_match.group(1)
-                if "," in raw_m2:
-                    raw_m2 = raw_m2.replace(".", "").replace(",", ".")
-                elif re.search(r"\.\d{3}$", raw_m2):
-                    raw_m2 = raw_m2.replace(".", "")
-                flaeche = int(float(raw_m2))
+        flaeche = parse_area(text)
 
         return {
             "kategorie":  "Grundstück",
@@ -490,9 +451,10 @@ def scrape_zvg(session: requests.Session) -> list[dict]:
 
                 # Verkehrswert row: extract numeric price
                 if "Verkehrswert" in row_text:
-                    # Handles: "10.800,00 €", "45.000,-", "45000 EUR", "45.000"
+                    # Handles: "10.800,00 €", "45.000,- €", "45.000,00 EUR"
+                    # Requires German decimal notation XX.XXX,XX (always used on ZVG portal)
                     price_match = re.search(
-                        r"(\d[\d.]*(?:,\d{1,2})?)\s*(?:EUR|€|-\s|$)", row_text
+                        r"(\d[\d.]*,\d{2})", row_text
                     )
                     if price_match:
                         raw_price = price_match.group(1)
@@ -501,7 +463,10 @@ def scrape_zvg(session: requests.Session) -> list[dict]:
                             raw_price = raw_price.replace(".", "").replace(",", ".")
                         elif re.search(r"\.\d{3}$", raw_price):
                             raw_price = raw_price.replace(".", "")
-                        current["price"] = int(float(raw_price))
+                        price = int(float(raw_price))
+                        if price < 100:
+                            price = None  # implausibly low: treat as parse error
+                        current["price"] = price
                     continue
 
             except Exception as e:
@@ -1093,8 +1058,9 @@ def main() -> int:
             time.sleep(PAUSE_S)
             r = fn(session)
             beteiligungen.extend(r)
-            if not r:
-                warnings.append(f"{name}: keine Ergebnisse")
+            real_results = [x for x in r if x.get("status") != "prüfen"]
+            if not real_results:
+                warnings.append(f"{name}: keine echten Projekte (manuelle Prüfung empfohlen)")
 
     # ── REPORT ──────────────────────────────────────────────────────────────
     logger.info("Grundstücke: %d | Beteiligungen: %d", len(grundstuecke), len(beteiligungen))
