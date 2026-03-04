@@ -16,6 +16,7 @@ import logging
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
+from html import escape
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -922,6 +923,11 @@ a:hover { text-decoration:underline; }
 """
 
 
+def _safe_href(url: str) -> str:
+    """Gibt url zurück wenn http/https, sonst '#'."""
+    return url if url.startswith(("https://", "http://")) else "#"
+
+
 def _quelle_tag(quelle: str) -> str:
     tags = {
         "Kleinanzeigen":       "tag",
@@ -929,32 +935,34 @@ def _quelle_tag(quelle: str) -> str:
         "Zwangsversteigerung": "tag3",
     }
     css = tags.get(quelle, "tag")
-    return f'<span class="{css}">{quelle}</span>'
+    return f'<span class="{css}">{escape(quelle)}</span>'
 
 
 def _plattform_tag(plattform: str) -> str:
-    return f'<span class="tag">{plattform}</span>'
+    return f'<span class="tag">{escape(plattform)}</span>'
 
 
 def build_grundstuecke_table(items: list[dict]) -> str:
     if not items:
         return '<div class="empty">Keine Grundstücke gefunden.</div>'
     headers = ["Quelle", "Titel", "Ort", "Fläche", "Preis", "€/m²", "Nutzungsidee", "Link"]
-    rows = ""
+    row_parts = []
     for b in sorted(items, key=lambda x: x.get("preis_eur") or 999_999):
         flaeche = f"{b['flaeche_m2']:,} m²".replace(",", ".") if b.get("flaeche_m2") else "–"
         preis   = f"{b['preis_eur']:,} €".replace(",", ".") if b.get("preis_eur") else "–"
-        epm2    = f"{b['eur_pro_m2']:.1f}" if b.get("eur_pro_m2") else "–"
-        rows += f"""<tr>
+        epm2    = f"{b['eur_pro_m2']:.1f}".replace(".", ",") if b.get("eur_pro_m2") else "–"
+        href    = _safe_href(b['link'])
+        row_parts.append(f"""<tr>
           <td>{_quelle_tag(b['quelle'])}</td>
-          <td><strong>{b['titel'][:80]}</strong></td>
-          <td>{b.get('ort', '–')}</td>
+          <td><strong>{escape(b['titel'][:80])}</strong></td>
+          <td>{escape(b.get('ort', '–'))}</td>
           <td>{flaeche}</td>
           <td>{preis}</td>
           <td>{epm2}</td>
-          <td style="color:#555577;font-size:0.82em">{b.get('nutzung', '–')}</td>
-          <td><a href="{b['link']}" target="_blank">→ Inserat</a></td>
-        </tr>"""
+          <td style="color:#555577;font-size:0.82em">{escape(b.get('nutzung', '–'))}</td>
+          <td><a href="{href}" target="_blank" rel="noopener noreferrer">→ Inserat</a></td>
+        </tr>""")
+    rows = "".join(row_parts)
     ths = "".join(f"<th>{h}</th>" for h in headers)
     return f"<table><tr>{ths}</tr>{rows}</table>"
 
@@ -963,28 +971,31 @@ def build_beteiligungen_table(items: list[dict]) -> str:
     if not items:
         return '<div class="empty">Keine Beteiligungen gefunden.</div>'
     headers = ["Plattform", "Projekt", "Typ", "Rendite p.a.", "Laufzeit", "Mind. Anlage", "Status", "Link"]
-    rows = ""
+    row_parts = []
     for b in sorted(items, key=lambda x: -(x.get("rendite_pct") or 0)):
         rendite    = f"{b['rendite_pct']:.1f} %" if b.get("rendite_pct") else "–"
         min_anlage = f"{b['min_anlage_eur']:,} €".replace(",", ".") if b.get("min_anlage_eur") else "–"
-        rows += f"""<tr>
+        href       = _safe_href(b['link'])
+        row_parts.append(f"""<tr>
           <td>{_plattform_tag(b['plattform'])}</td>
-          <td><strong>{b['titel'][:80]}</strong></td>
-          <td>{b.get('typ', '–')}</td>
+          <td><strong>{escape(b['titel'][:80])}</strong></td>
+          <td>{escape(b.get('typ', '–'))}</td>
           <td style="color:#1a7a30;font-weight:700">{rendite}</td>
-          <td>{b.get('laufzeit', '–')}</td>
+          <td>{escape(b.get('laufzeit', '–'))}</td>
           <td>{min_anlage}</td>
-          <td>{b.get('status', '–')}</td>
-          <td><a href="{b['link']}" target="_blank">→ Projekt</a></td>
-        </tr>"""
+          <td>{escape(b.get('status', '–'))}</td>
+          <td><a href="{href}" target="_blank" rel="noopener noreferrer">→ Projekt</a></td>
+        </tr>""")
+    rows = "".join(row_parts)
     ths = "".join(f"<th>{h}</th>" for h in headers)
     return f"<table><tr>{ths}</tr>{rows}</table>"
 
 
 def generate_html(grundstuecke: list[dict], beteiligungen: list[dict],
                   warnings: list[str]) -> str:
-    date_str  = datetime.now().strftime("%d.%m.%Y")
-    timestamp = datetime.now().strftime("%d.%m.%Y %H:%M")
+    now       = datetime.now()
+    date_str  = now.strftime("%d.%m.%Y")
+    timestamp = now.strftime("%d.%m.%Y %H:%M")
 
     preise_m2 = [b["eur_pro_m2"] for b in grundstuecke if b.get("eur_pro_m2")]
     avg_epm2  = f"{sum(preise_m2)/len(preise_m2):.0f} €/m²" if preise_m2 else "–"
@@ -992,9 +1003,10 @@ def generate_html(grundstuecke: list[dict], beteiligungen: list[dict],
     renditen  = [b["rendite_pct"] for b in beteiligungen if b.get("rendite_pct")]
     best_rend = f"{max(renditen):.1f} %" if renditen else "–"
 
-    warn_html = "".join(f'<div class="warn">⚠️ {w}</div>' for w in warnings)
+    warn_html = "".join(f'<div class="warn">&#9888;&#65039; {escape(w)}</div>' for w in warnings)
 
-    max_price_fmt = f"{MAX_PRICE:,}".replace(",", ".")
+    max_price_fmt   = f"{MAX_PRICE:,}".replace(",", ".")
+    min_rendite_fmt = f"{MIN_RENDITE:.1f}".replace(".", ",")
 
     return f"""<!DOCTYPE html>
 <html lang="de">
@@ -1004,27 +1016,27 @@ def generate_html(grundstuecke: list[dict], beteiligungen: list[dict],
 <style>{CSS}</style>
 </head>
 <body>
-<h1>💼 Investment Scanner — {date_str}</h1>
+<h1>&#128188; Investment Scanner — {date_str}</h1>
 
 <div class="summary">
-  <div class="card"><div class="val">{len(grundstuecke)}</div><div class="lbl">🏡 Grundstücke</div></div>
-  <div class="card"><div class="val">{len(beteiligungen)}</div><div class="lbl">💰 Beteiligungen</div></div>
+  <div class="card"><div class="val">{len(grundstuecke)}</div><div class="lbl">&#127968; Grundstücke</div></div>
+  <div class="card"><div class="val">{len(beteiligungen)}</div><div class="lbl">&#128176; Beteiligungen</div></div>
   <div class="card"><div class="val">{avg_epm2}</div><div class="lbl">Ø €/m²</div></div>
   <div class="card"><div class="val">{best_rend}</div><div class="lbl">Beste Rendite</div></div>
 </div>
 
 {warn_html}
 
-<h2>🏡 Grundstücke (max. {max_price_fmt} €)</h2>
+<h2>&#127968; Grundstücke (max. {max_price_fmt} €)</h2>
 {build_grundstuecke_table(grundstuecke)}
 
-<h2>💰 Beteiligungen & Crowdfunding (min. {MIN_RENDITE} % p.a.)</h2>
+<h2>&#128176; Beteiligungen & Crowdfunding (min. {min_rendite_fmt} % p.a.)</h2>
 {build_beteiligungen_table(beteiligungen)}
 
 <div class="footer">
   Generiert: {timestamp} &nbsp;|&nbsp;
   Quellen: Kleinanzeigen.de · DGA · ZVG-Portal · Bergfürst · Wiwin · Bettervest · Exporo<br>
-  ⚠️ Diese Übersicht dient ausschließlich zu Informationszwecken. Keine Anlageberatung.
+  &#9888;&#65039; Diese Übersicht dient ausschließlich zu Informationszwecken. Keine Anlageberatung.
 </div>
 </body>
 </html>"""
