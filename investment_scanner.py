@@ -1047,62 +1047,65 @@ def generate_html(grundstuecke: list[dict], beteiligungen: list[dict],
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def main() -> int:
+    now      = datetime.now()
     print("=" * 60)
-    print(f"  Investment Scanner — {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+    print(f"  Investment Scanner — {now.strftime('%d.%m.%Y %H:%M')}")
     print("=" * 60)
 
-    date_str = datetime.now().strftime("%Y-%m-%d")
+    date_str = now.strftime("%Y-%m-%d")
     out_dir  = OUTPUT_DIR / date_str
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    session  = make_session()
     warnings = []
 
-    # ── GRUNDSTÜCKE ─────────────────────────────────────────────────────────
-    logger.info("=== Grundstücke ===")
-    grundstuecke = []
+    with make_session() as session:
+        # ── GRUNDSTÜCKE ─────────────────────────────────────────────────────
+        logger.info("=== Grundstücke ===")
+        grundstuecke = []
 
-    r = scrape_kleinanzeigen(session)
-    grundstuecke.extend(r)
-    if not r:
-        warnings.append("Kleinanzeigen: keine Ergebnisse (Selektoren prüfen)")
-    time.sleep(PAUSE_S)
-
-    r = scrape_dga(session)
-    grundstuecke.extend(r)
-    if not r:
-        warnings.append("DGA: keine Ergebnisse")
-    time.sleep(PAUSE_S)
-
-    r = scrape_zvg(session)
-    grundstuecke.extend(r)
-    if not r:
-        warnings.append("ZVG-Portal: keine Ergebnisse")
-    time.sleep(PAUSE_S)
-
-    # ── BETEILIGUNGEN ───────────────────────────────────────────────────────
-    logger.info("=== Beteiligungen ===")
-    beteiligungen = []
-
-    for fn, name in [
-        (scrape_bettervest, "Bettervest"),
-        (scrape_bergfuerst, "Bergfürst"),
-        (scrape_wiwin,      "Wiwin"),
-        (scrape_exporo,     "Exporo"),
-    ]:
-        r = fn(session)
-        beteiligungen.extend(r)
+        r = scrape_kleinanzeigen(session)
+        grundstuecke.extend(r)
         if not r:
-            warnings.append(f"{name}: keine Ergebnisse")
+            warnings.append("Kleinanzeigen: keine Ergebnisse (Selektoren prüfen)")
         time.sleep(PAUSE_S)
+
+        r = scrape_dga(session)
+        grundstuecke.extend(r)
+        if not r:
+            warnings.append("DGA: keine Ergebnisse")
+        time.sleep(PAUSE_S)
+
+        r = scrape_zvg(session)
+        grundstuecke.extend(r)
+        if not r:
+            warnings.append("ZVG-Portal: keine Ergebnisse")
+
+        # ── BETEILIGUNGEN ───────────────────────────────────────────────────
+        logger.info("=== Beteiligungen ===")
+        beteiligungen = []
+
+        for fn, name in [
+            (scrape_bettervest, "Bettervest"),
+            (scrape_bergfuerst, "Bergfürst"),
+            (scrape_wiwin,      "Wiwin"),
+            (scrape_exporo,     "Exporo"),
+        ]:
+            time.sleep(PAUSE_S)
+            r = fn(session)
+            beteiligungen.extend(r)
+            if not r:
+                warnings.append(f"{name}: keine Ergebnisse")
 
     # ── REPORT ──────────────────────────────────────────────────────────────
     logger.info("Grundstücke: %d | Beteiligungen: %d", len(grundstuecke), len(beteiligungen))
 
     html      = generate_html(grundstuecke, beteiligungen, warnings)
     html_path = out_dir / "investments.html"
-    html_path.write_text(html, encoding="utf-8")
-    logger.info("HTML: %s", html_path)
+    try:
+        html_path.write_text(html, encoding="utf-8")
+        logger.info("HTML: %s", html_path)
+    except OSError as e:
+        logger.warning("HTML schreiben fehlgeschlagen: %s", e)
 
     # ── CSV ─────────────────────────────────────────────────────────────────
     rows = []
@@ -1132,13 +1135,18 @@ def main() -> int:
         })
 
     if rows:
+        # Kategorie first, then remaining columns alphabetically
+        all_keys   = {k for r in rows for k in r}
+        fieldnames = ["Kategorie"] + sorted(all_keys - {"Kategorie"})
         csv_path   = out_dir / "investments.csv"
-        fieldnames = sorted({k for r in rows for k in r})
-        with open(csv_path, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
-            writer.writeheader()
-            writer.writerows(rows)
-        logger.info("CSV:  %s", csv_path)
+        try:
+            with open(csv_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+                writer.writeheader()
+                writer.writerows(rows)
+            logger.info("CSV:  %s", csv_path)
+        except OSError as e:
+            logger.warning("CSV schreiben fehlgeschlagen: %s", e)
 
     print("\n✓ Fertig!")
     return 0
