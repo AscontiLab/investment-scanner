@@ -1092,6 +1092,8 @@ def main() -> int:
     ]:
         r = fn(session)
         beteiligungen.extend(r)
+        if not r:
+            warnings.append(f"{name}: keine Ergebnisse")
         time.sleep(PAUSE_S)
 
     # ── REPORT ──────────────────────────────────────────────────────────────
