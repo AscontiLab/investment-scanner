@@ -1,1 +1,5 @@
-output/\nlogs/\n__pycache__/\n*.pyc
+output/
+logs/
+__pycache__/
+*.pyc
+*.log
