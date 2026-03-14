@@ -1,43 +1,49 @@
 # Investment Scanner
 
-Aggregiert Grundstücke und Crowdfunding-Beteiligungen aus mehreren Quellen und erstellt einen HTML-Report.
+## Ueberblick
 
-## Was es macht
+Kompakte Variante des Investment-Scanners fuer Grundstuecke und Crowdfunding-Deals. Das Repo konzentriert sich auf die Einzeldatei-Implementierung mit Report-Ausgabe und einfachem Wrapper-Skript.
 
-- Scrapet Grundstücke bis max. 50.000 € in Berlin, Brandenburg, Mecklenburg-Vorpommern, Sachsen und Sachsen-Anhalt
-- Aggregiert Crowdfunding-Projekte mit mind. 4 % Rendite p.a.
-- Erstellt einen HTML-Report mit Summary-Cards, Tabellen und Nutzungsideen
+## Zweck
 
-## Quellen
+- Guenstige Grundstuecksangebote aggregieren
+- Crowdfunding-Projekte nach Mindestrendite filtern
+- Ergebnisse als HTML- und CSV-Report bereitstellen
 
-| Kategorie | Quelle |
-|-----------|--------|
-| Grundstücke | Kleinanzeigen.de, DGA (Deutsche Grundstücksauktionen), ZVG (Zwangsversteigerungen) |
-| Crowdfunding | Bergfürst, Wiwin, Bettervest, Exporo |
+## Bestandteile
 
-## Nutzungsideen (regelbasiert)
+- `investment_scanner.py`
+  - Hauptlogik fuer Scan und Report
+- `run_scanner.sh`
+  - Wrapper fuer den periodischen Betrieb
+- `send_report.py`
+  - E-Mail-Versand
 
-| Grundstück | Idee |
-|-----------|------|
-| Wiese/Acker > 2.000 m² | PV-Anlage (Pacht/Eigen) |
-| Wiese/Acker ≤ 2.000 m² | Kleingarten, Freizeitgrundstück |
-| Wald | Holzertrag, Erholungswald |
-| Bauland | Tiny House, Ferienwohnung |
-| Günstig, sonstig | Stellplatz, Lagerplatz |
+## Voraussetzungen
 
-## Installation
+- Python 3.10+
+- `requests`
+- `beautifulsoup4`
+
+## Einrichtung
 
 ```bash
+cd /home/claude-agent/investment_scanner
 pip install requests beautifulsoup4
 ```
 
-## Ausführung
+## Konfiguration
+
+- Scanner-Schwellenwerte liegen direkt in `investment_scanner.py`
+- E-Mail-Zugangsdaten werden ueber `~/.stock_scanner_credentials` gelesen
+
+## Nutzung
 
 ```bash
 python3 investment_scanner.py
 ```
 
-Oder mit Log-Datei:
+oder
 
 ```bash
 bash run_scanner.sh
@@ -45,31 +51,13 @@ bash run_scanner.sh
 
 ## Output
 
-```
-output/YYYY-MM-DD/
-├── investments.html   # HTML-Report mit Summary und Tabellen
-└── investments.csv    # Alle Einträge als CSV
-```
+Das Repo erzeugt Report-Dateien unter `output/YYYY-MM-DD/`, sofern der Scanner erfolgreich durchlaeuft.
 
-## Report per E-Mail
+## Betriebshinweise
 
-Credentials in `~/.stock_scanner_credentials`:
+- Diese Variante ist die schlankere Einzelrepo-Ausfuehrung ohne weitergehende Dokuordner
+- Fuer produktiven Betrieb sollte ein gemeinsamer, dokumentierter Credential- und Cron-Standard verwendet werden
 
-```
-GMAIL_USER=...
-GMAIL_APP_PASSWORD=...
-GMAIL_RECIPIENT=...
-```
+## Status
 
-```bash
-python3 send_report.py
-```
-
-## Konfiguration
-
-In `investment_scanner.py`:
-
-```python
-MAX_PRICE   = 50_000   # € Maximalpreis Grundstücke
-MIN_RENDITE = 4.0      # % p.a. Mindestrendite Crowdfunding
-```
+Leichte Einzeldatei-Variante des Investment-Scanners.
