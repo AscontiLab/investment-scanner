@@ -14,6 +14,9 @@ CREDS_FILE = Path.home() / ".stock_scanner_credentials"
 
 def load_creds() -> dict:
     creds = {}
+    if not CREDS_FILE.exists():
+        print(f"Fehler: Credentials-Datei fehlt: {CREDS_FILE}", file=sys.stderr)
+        return {}
     with open(CREDS_FILE) as f:
         for line in f:
             line = line.strip()
@@ -21,6 +24,14 @@ def load_creds() -> dict:
                 k, v = line.split("=", 1)
                 creds[k.strip()] = v.strip()
     return creds
+
+
+def require_keys(creds: dict, keys: list[str]) -> bool:
+    missing = [k for k in keys if not creds.get(k)]
+    if missing:
+        print(f"Fehler: Fehlende Credentials: {', '.join(missing)}", file=sys.stderr)
+        return False
+    return True
 
 
 def find_latest_report() -> Path | None:
@@ -31,6 +42,8 @@ def find_latest_report() -> Path | None:
 
 def main() -> int:
     creds = load_creds()
+    if not require_keys(creds, ["GMAIL_USER", "GMAIL_APP_PASSWORD", "GMAIL_RECIPIENT"]):
+        return 1
     user = creds["GMAIL_USER"]
     password = creds["GMAIL_APP_PASSWORD"]
     recipient = creds["GMAIL_RECIPIENT"]

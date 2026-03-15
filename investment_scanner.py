@@ -8,18 +8,27 @@ Quellen Grundstücke:  Kleinanzeigen.de, DGA, Zwangsversteigerungstermine.de
 Quellen Crowdfunding: Bettervest, Bergfürst, Wiwin, Exporo
 """
 
+import argparse
 import csv
 import json
+import logging
 import re
 import time
-import logging
+
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
 from html import escape
 from pathlib import Path
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+LOG_DIR = Path(__file__).parent / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+LOG_FILE = LOG_DIR / "scanner.log"
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    filename=str(LOG_FILE),
+)
 logger = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1011,7 +1020,38 @@ def generate_html(grundstuecke: list[dict], beteiligungen: list[dict],
 # MAIN
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Investment Scanner")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Keine externen API-Calls; erzeugt leeren Report für Smoke-Check.",
+    )
+    return parser.parse_args()
+
+
+def _dedupe(items: list[dict]) -> list[dict]:
+    """Entfernt Duplikate anhand von Link oder (Titel+Ort+Preis)."""
+    seen: set[str] = set()
+    out: list[dict] = []
+    for it in items:
+        link = (it.get("link") or "").strip().lower()
+        if link:
+            key = f"link:{link}"
+        else:
+            title = (it.get("titel") or "").strip().lower()
+            ort = (it.get("ort") or "").strip().lower()
+            preis = str(it.get("preis_eur") or "")
+            key = f"t:{title}|o:{ort}|p:{preis}"
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(it)
+    return out
+
+
 def main() -> int:
+    args = parse_args()
     now      = datetime.now()
     print("=" * 60)
     print(f"  Investment Scanner — {now.strftime('%d.%m.%Y %H:%M')}")
@@ -1023,46 +1063,52 @@ def main() -> int:
 
     warnings = []
 
-    with make_session() as session:
-        # ── GRUNDSTÜCKE ─────────────────────────────────────────────────────
-        logger.info("=== Grundstücke ===")
-        grundstuecke = []
+    grundstuecke: list[dict] = []
+    beteiligungen: list[dict] = []
 
-        r = scrape_kleinanzeigen(session)
-        grundstuecke.extend(r)
-        if not r:
-            warnings.append("Kleinanzeigen: keine Ergebnisse (Selektoren prüfen)")
-        time.sleep(PAUSE_S)
+    if args.dry_run:
+        print("[DRY-RUN] Keine externen API-Calls. Erzeuge leeren Report …")
+    else:
+        with make_session() as session:
+            # ── GRUNDSTÜCKE ─────────────────────────────────────────────────
+            logger.info("=== Grundstücke ===")
 
-        r = scrape_dga(session)
-        grundstuecke.extend(r)
-        if not r:
-            warnings.append("DGA: keine Ergebnisse")
-        time.sleep(PAUSE_S)
-
-        r = scrape_zvg(session)
-        grundstuecke.extend(r)
-        if not r:
-            warnings.append("ZVG-Portal: keine Ergebnisse")
-
-        # ── BETEILIGUNGEN ───────────────────────────────────────────────────
-        logger.info("=== Beteiligungen ===")
-        beteiligungen = []
-
-        for fn, name in [
-            (scrape_bettervest, "Bettervest"),
-            (scrape_bergfuerst, "Bergfürst"),
-            (scrape_wiwin,      "Wiwin"),
-            (scrape_exporo,     "Exporo"),
-        ]:
+            r = scrape_kleinanzeigen(session)
+            grundstuecke.extend(r)
+            if not r:
+                warnings.append("Kleinanzeigen: keine Ergebnisse (Selektoren prüfen)")
             time.sleep(PAUSE_S)
-            r = fn(session)
-            beteiligungen.extend(r)
-            real_results = [x for x in r if x.get("status") != "prüfen"]
-            if not real_results:
-                warnings.append(f"{name}: keine echten Projekte (manuelle Prüfung empfohlen)")
+
+            r = scrape_dga(session)
+            grundstuecke.extend(r)
+            if not r:
+                warnings.append("DGA: keine Ergebnisse")
+            time.sleep(PAUSE_S)
+
+            r = scrape_zvg(session)
+            grundstuecke.extend(r)
+            if not r:
+                warnings.append("ZVG-Portal: keine Ergebnisse")
+
+            # ── BETEILIGUNGEN ───────────────────────────────────────────────
+            logger.info("=== Beteiligungen ===")
+
+            for fn, name in [
+                (scrape_bettervest, "Bettervest"),
+                (scrape_bergfuerst, "Bergfürst"),
+                (scrape_wiwin,      "Wiwin"),
+                (scrape_exporo,     "Exporo"),
+            ]:
+                time.sleep(PAUSE_S)
+                r = fn(session)
+                beteiligungen.extend(r)
+                real_results = [x for x in r if x.get("status") != "prüfen"]
+                if not real_results:
+                    warnings.append(f"{name}: keine echten Projekte (manuelle Prüfung empfohlen)")
 
     # ── REPORT ──────────────────────────────────────────────────────────────
+    grundstuecke = _dedupe(grundstuecke)
+    beteiligungen = _dedupe(beteiligungen)
     logger.info("Grundstücke: %d | Beteiligungen: %d", len(grundstuecke), len(beteiligungen))
 
     html      = generate_html(grundstuecke, beteiligungen, warnings)
