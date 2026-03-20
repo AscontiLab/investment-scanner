@@ -38,6 +38,24 @@ logger = logging.getLogger(__name__)
 MAX_PRICE   = 50_000   # € Maximalpreis Grundstücke
 MIN_RENDITE = 4.0      # % p.a. Mindestrendite Crowdfunding
 
+# DGA Company-Mapping
+DGA_COMPANIES = {
+    "D": "DGA",
+    "S": "Sächsische",
+    "N": "Norddeutsche",
+    "W": "Westdeutsche",
+    "P": "Plettner",
+}
+
+DGA_CATEGORIES = {
+    "GRDBG": "Grundstück",
+    "ETWTE": "Eigentumswohnung",
+    "EFHZFH": "Ein-/Zweifamilienhaus",
+    "MFHWGH": "Mehrfamilienhaus",
+    "GE": "Gewerbe",
+    "Special": "Sonderobjekt",
+}
+
 OUTPUT_DIR  = Path(__file__).parent / "output"
 PAUSE_S     = 1.5   # Sekunden Pause zwischen Requests
 
@@ -235,8 +253,11 @@ def scrape_dga(session: requests.Session) -> list[dict]:
     Scrapet Grundstück-Auktionen von Deutsche Grundstücksauktionen AG (dga-ag.de).
 
     Die Seite bettet alle Objekte als JSON in eine JS-Variable 'var locations' ein.
-    Jeder Eintrag enthält ein 'filter'-Objekt mit region, limit, category sowie
-    ein 'infoWindow'-HTML-Schnipsel mit Titel, Adresse und Objekt-Link.
+    Jeder Eintrag enthält ein 'filter'-Objekt mit region, limit, category,
+    auctionNumber, company, rentedOrLeased, protectedAsAHistoricMonument, status
+    sowie ein 'infoWindow'-HTML-Schnipsel mit Titel, Adresse und Objekt-Link.
+
+    Filter: status in (aktuell, nachverkauf), limit <= MAX_PRICE, bundesweit.
     """
     url = "https://www.dga-ag.de/immobilie-ersteigern/immobilie-suchen-und-finden.html"
     logger.info("DGA-AG: %s", url)
@@ -257,27 +278,41 @@ def scrape_dga(session: requests.Session) -> list[dict]:
         logger.warning("DGA-AG JSON-Parse-Fehler: %s", e)
         return []
 
-    # East-German region identifiers as used in the filter.region field
-    east_regions = {
-        "berlin", "brandenburg", "mecklenburg-vorpommern",
-        "sachsen", "sachsen-anhalt",
-    }
+    allowed_statuses = {"aktuell", "nachverkauf"}
 
     results = []
     for entry in locations:
         try:
             f       = entry.get("filter", {})
-            region  = str(f.get("region", "")).lower()
             limit   = f.get("limit")          # auction limit in EUR (int)
             status  = str(f.get("status", "")).lower()
 
-            # Only active, in-region, within budget
-            if status not in ("aktuell", ""):
+            # Status: nur aktuell und nachverkauf
+            if status not in allowed_statuses:
                 continue
-            if not any(r in region for r in east_regions):
-                continue
+            # Preisfilter
             if limit is not None and int(limit) > MAX_PRICE:
                 continue
+
+            # Company-Code und Name
+            company_code = str(f.get("company", "D"))
+            company_name = DGA_COMPANIES.get(company_code, "DGA")
+
+            # Kategorie
+            category_code = str(f.get("category", ""))
+            category = DGA_CATEGORIES.get(category_code, category_code)
+
+            # Auktionsnummer
+            auction_number = str(f.get("auctionNumber", ""))
+
+            # Zusatzfelder
+            rented   = str(f.get("rentedOrLeased", ""))
+            monument = str(f.get("protectedAsAHistoricMonument", ""))
+            region   = str(f.get("region", ""))
+
+            # Quelle: "{Company} {Status}"
+            status_label = "Nachverkauf" if status == "nachverkauf" else "Auktion"
+            quelle = f"{company_name} {status_label}"
 
             # Parse the infoWindow HTML snippet for title, address, link
             iw_soup = BeautifulSoup(entry.get("infoWindow", ""), "html.parser")
@@ -305,15 +340,23 @@ def scrape_dga(session: requests.Session) -> list[dict]:
             price = int(limit) if limit is not None else None
 
             results.append({
-                "kategorie":  "Grundstück",
-                "quelle":     "DGA Auktion",
-                "titel":      title,
-                "ort":        ort,
-                "flaeche_m2": flaeche,
-                "preis_eur":  price,
-                "eur_pro_m2": round(price / flaeche, 2) if price and flaeche else None,
-                "nutzung":    nutzungsidee(title, flaeche),
-                "link":       href or url,
+                "kategorie":      "Grundstück",
+                "quelle":         quelle,
+                "titel":          title,
+                "ort":            ort,
+                "flaeche_m2":     flaeche,
+                "preis_eur":      price,
+                "eur_pro_m2":     round(price / flaeche, 2) if price and flaeche else None,
+                "nutzung":        nutzungsidee(title, flaeche),
+                "link":           href or url,
+                "company":        company_code,
+                "auction_number": auction_number,
+                "category":       category,
+                "category_code":  category_code,
+                "status":         status,
+                "rented":         rented,
+                "monument":       monument,
+                "region":         region,
             })
         except Exception as e:
             logger.warning("DGA-AG Parse-Fehler: %s", e)
@@ -1110,6 +1153,40 @@ def main() -> int:
     grundstuecke = _dedupe(grundstuecke)
     beteiligungen = _dedupe(beteiligungen)
     logger.info("Grundstücke: %d | Beteiligungen: %d", len(grundstuecke), len(beteiligungen))
+
+    # ── DB-Integration ────────────────────────────────────────────────────
+    try:
+        from invest_db import init_db, upsert_property, log_scan_run
+        init_db()
+        all_items = grundstuecke + beteiligungen
+        new_count = 0
+        for item in all_items:
+            # Mapping: DB erwartet link, source, title, location, price, area_m2
+            db_record = {
+                "link":     item.get("link", ""),
+                "source":   item.get("quelle", item.get("plattform", "")),
+                "title":    item.get("titel", ""),
+                "location": item.get("ort", ""),
+                "price":    item.get("preis_eur"),
+                "area_m2":  item.get("flaeche_m2"),
+            }
+            # Zusätzliche DGA-Felder durchreichen
+            for key in ("company", "auction_number", "category", "category_code",
+                        "status", "rented", "monument", "region"):
+                if key in item:
+                    db_record[key] = item[key]
+            # Beteiligungsfelder durchreichen
+            for key in ("rendite_pct", "laufzeit", "min_anlage_eur", "typ"):
+                if key in item:
+                    db_record[key] = item[key]
+            if upsert_property(db_record):
+                new_count += 1
+        log_scan_run(len(all_items), new_count)
+        logger.info("DB: %d Einträge, davon %d neu", len(all_items), new_count)
+    except ImportError:
+        logger.warning("invest_db nicht verfügbar — DB-Integration übersprungen")
+    except Exception as e:
+        logger.warning("DB-Integration Fehler: %s", e)
 
     html      = generate_html(grundstuecke, beteiligungen, warnings)
     html_path = out_dir / "investments.html"
