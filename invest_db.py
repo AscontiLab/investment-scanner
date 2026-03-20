@@ -85,12 +85,12 @@ def upsert_property(prop: dict) -> bool:
             fields = [
                 "source", "company", "title", "location", "region",
                 "price", "area_m2", "price_per_m2", "category", "category_code",
-                "status", "rented", "monument", "auction_number",
+                "status", "rented", "monument", "auction_number", "catalog_text",
             ]
             updates = ["last_seen = ?"]
             values = [today]
             for f in fields:
-                if f in prop:
+                if f in prop and prop[f]:
                     updates.append(f"{f} = ?")
                     values.append(prop[f])
             values.append(link)

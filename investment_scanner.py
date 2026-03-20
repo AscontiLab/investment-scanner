@@ -1154,6 +1154,16 @@ def main() -> int:
     beteiligungen = _dedupe(beteiligungen)
     logger.info("Grundstücke: %d | Beteiligungen: %d", len(grundstuecke), len(beteiligungen))
 
+    # ── Katalog-Anreicherung (DGA-Objekte mit Expose-Daten) ──────────────
+    try:
+        from dga_catalog import enrich_dga_properties
+        grundstuecke = enrich_dga_properties(grundstuecke)
+        logger.info("Katalog-Anreicherung abgeschlossen")
+    except ImportError:
+        logger.info("dga_catalog nicht verfuegbar — Katalogdaten uebersprungen")
+    except Exception as e:
+        logger.warning("Katalog-Anreicherung Fehler: %s", e)
+
     # ── DB-Integration ────────────────────────────────────────────────────
     try:
         from invest_db import init_db, upsert_property, log_scan_run
@@ -1172,7 +1182,7 @@ def main() -> int:
             }
             # Zusätzliche DGA-Felder durchreichen
             for key in ("company", "auction_number", "category", "category_code",
-                        "status", "rented", "monument", "region"):
+                        "status", "rented", "monument", "region", "catalog_text"):
                 if key in item:
                     db_record[key] = item[key]
             # Beteiligungsfelder durchreichen
