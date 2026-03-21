@@ -290,8 +290,8 @@ def scrape_dga(session: requests.Session) -> list[dict]:
             # Status: nur aktuell und nachverkauf
             if status not in allowed_statuses:
                 continue
-            # Preisfilter
-            if limit is not None and int(limit) > MAX_PRICE:
+            # Preisfilter (kein Limit fuer Nachverkauf)
+            if status != "nachverkauf" and limit is not None and int(limit) > MAX_PRICE:
                 continue
 
             # Company-Code und Name
