@@ -31,6 +31,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+REVIEW_LABELS = {
+    "interessant": ("review-good", "Interessant"),
+    "nachfassen": ("review-follow", "Nachfassen"),
+    "ignorieren": ("review-skip", "Ignorieren"),
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # KONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -931,6 +937,15 @@ tr:hover td { background:#f5f8ff; }
         padding:2px 7px; font-size:0.75em; }
 .warn { background:#fff8e8; border-left:3px solid #e09000; padding:10px 14px;
         color:#664400; font-size:0.82em; border-radius:0 6px 6px 0; margin:8px 0; }
+.review-card { background:#ffffff; border:1px solid #dde3ed; border-radius:8px; padding:14px 16px; margin:18px 0; }
+.review-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap:12px; }
+.review-item { border:1px solid #e5ebf5; border-radius:8px; padding:10px 12px; background:#f9fbff; }
+.review-note { color:#555577; font-size:0.8em; margin-top:6px; line-height:1.4; }
+.review-tag { display:inline-block; border-radius:999px; padding:3px 9px; font-size:0.75em; font-weight:600; }
+.review-open { background:#eef2fa; color:#445; }
+.review-good { background:#e8f6eb; color:#1a7a30; }
+.review-follow { background:#fff4e5; color:#b36200; }
+.review-skip { background:#fdecec; color:#b02525; }
 .empty { color:#777799; padding:18px; text-align:center;
          background:#f7f9ff; border:1px solid #dde3ed; border-radius:8px; }
 a    { color:#1a56a0; text-decoration:none; }
@@ -959,16 +974,63 @@ def _plattform_tag(plattform: str) -> str:
     return f'<span class="tag">{escape(plattform)}</span>'
 
 
+def _review_badge(status: str | None) -> str:
+    if not status:
+        return '<span class="review-tag review-open">Offen</span>'
+    css, label = REVIEW_LABELS.get(status, ("review-open", status))
+    return f'<span class="review-tag {css}">{escape(label)}</span>'
+
+
+def _review_summary(items: list[dict]) -> str:
+    counts = {"offen": 0, "interessant": 0, "nachfassen": 0, "ignorieren": 0}
+    for item in items:
+        counts[item.get("operator_status") or "offen"] = counts.get(item.get("operator_status") or "offen", 0) + 1
+    return (
+        f'<div class="card"><div class="val">{counts["offen"]}</div><div class="lbl">Offen</div></div>'
+        f'<div class="card"><div class="val">{counts["interessant"]}</div><div class="lbl">Interessant</div></div>'
+        f'<div class="card"><div class="val">{counts["nachfassen"]}</div><div class="lbl">Nachfassen</div></div>'
+        f'<div class="card"><div class="val">{counts["ignorieren"]}</div><div class="lbl">Ignorieren</div></div>'
+    )
+
+
+def _build_review_queue(items: list[dict]) -> str:
+    queue = [item for item in items if not item.get("operator_status")]
+    queue.sort(key=lambda item: (item.get("ki_score") is None, -(item.get("ki_score") or 0), item.get("price") or item.get("preis_eur") or 10**12))
+    queue = queue[:6]
+    if not queue:
+        return '<div class="empty">Keine offenen Review-Kandidaten im aktuellen Bestand.</div>'
+
+    parts = []
+    for item in queue:
+        title = escape((item.get("title") or item.get("titel") or "?")[:90])
+        location = escape(item.get("location") or item.get("ort") or "–")
+        price = item.get("price") or item.get("preis_eur")
+        price_html = f"{price:,} €".replace(",", ".") if price else "–"
+        score = item.get("ki_score")
+        score_html = f"KI-Score {score:.1f}" if isinstance(score, (int, float)) else "Noch kein KI-Score"
+        link = _safe_href(item.get("link") or "")
+        parts.append(
+            f"""<div class="review-item">
+<div><strong>{title}</strong></div>
+<div class="review-note">{location} · {price_html} · {score_html}</div>
+<div class="review-note">CLI: <code>python3 investment_scanner.py --review-link "{escape(item.get('link') or '')}" --review-status interessant</code></div>
+<div class="review-note"><a href="{link}" target="_blank" rel="noopener noreferrer">→ Deal öffnen</a></div>
+</div>"""
+        )
+    return f'<div class="review-grid">{"".join(parts)}</div>'
+
+
 def build_grundstuecke_table(items: list[dict]) -> str:
     if not items:
         return '<div class="empty">Keine Grundstücke gefunden.</div>'
-    headers = ["Quelle", "Titel", "Ort", "Fläche", "Preis", "€/m²", "Nutzungsidee", "Link"]
+    headers = ["Quelle", "Titel", "Ort", "Fläche", "Preis", "€/m²", "Review", "Nutzungsidee", "Link"]
     row_parts = []
     for b in sorted(items, key=lambda x: x.get("preis_eur") or 999_999):
         flaeche = f"{b['flaeche_m2']:,} m²".replace(",", ".") if b.get("flaeche_m2") else "–"
         preis   = f"{b['preis_eur']:,} €".replace(",", ".") if b.get("preis_eur") else "–"
         epm2    = f"{b['eur_pro_m2']:.1f}".replace(".", ",") if b.get("eur_pro_m2") else "–"
         href    = _safe_href(b['link'])
+        review_note = escape(b.get("operator_note") or "")
         row_parts.append(f"""<tr>
           <td>{_quelle_tag(b['quelle'])}</td>
           <td><strong>{escape(b['titel'][:80])}</strong></td>
@@ -976,6 +1038,7 @@ def build_grundstuecke_table(items: list[dict]) -> str:
           <td>{flaeche}</td>
           <td>{preis}</td>
           <td>{epm2}</td>
+          <td>{_review_badge(b.get('operator_status'))}{f'<div class="review-note">{review_note}</div>' if review_note else ''}</td>
           <td style="color:#555577;font-size:0.82em">{escape(b.get('nutzung', '–'))}</td>
           <td><a href="{href}" target="_blank" rel="noopener noreferrer">→ Inserat</a></td>
         </tr>""")
@@ -987,12 +1050,13 @@ def build_grundstuecke_table(items: list[dict]) -> str:
 def build_beteiligungen_table(items: list[dict]) -> str:
     if not items:
         return '<div class="empty">Keine Beteiligungen gefunden.</div>'
-    headers = ["Plattform", "Projekt", "Typ", "Rendite p.a.", "Laufzeit", "Mind. Anlage", "Status", "Link"]
+    headers = ["Plattform", "Projekt", "Typ", "Rendite p.a.", "Laufzeit", "Mind. Anlage", "Status", "Review", "Link"]
     row_parts = []
     for b in sorted(items, key=lambda x: -(x.get("rendite_pct") or 0)):
         rendite    = f"{b['rendite_pct']:.1f} %" if b.get("rendite_pct") else "–"
         min_anlage = f"{b['min_anlage_eur']:,} €".replace(",", ".") if b.get("min_anlage_eur") else "–"
         href       = _safe_href(b['link'])
+        review_note = escape(b.get("operator_note") or "")
         row_parts.append(f"""<tr>
           <td>{_plattform_tag(b['plattform'])}</td>
           <td><strong>{escape(b['titel'][:80])}</strong></td>
@@ -1001,6 +1065,7 @@ def build_beteiligungen_table(items: list[dict]) -> str:
           <td>{escape(b.get('laufzeit', '–'))}</td>
           <td>{min_anlage}</td>
           <td>{escape(b.get('status', '–'))}</td>
+          <td>{_review_badge(b.get('operator_status'))}{f'<div class="review-note">{review_note}</div>' if review_note else ''}</td>
           <td><a href="{href}" target="_blank" rel="noopener noreferrer">→ Projekt</a></td>
         </tr>""")
     rows = "".join(row_parts)
@@ -1024,6 +1089,9 @@ def generate_html(grundstuecke: list[dict], beteiligungen: list[dict],
 
     max_price_fmt   = f"{MAX_PRICE:,}".replace(",", ".")
     min_rendite_fmt = f"{MIN_RENDITE:.1f}".replace(".", ",")
+    review_items = grundstuecke + beteiligungen
+    review_summary = _review_summary(review_items)
+    review_queue = _build_review_queue(review_items)
 
     return f"""<!DOCTYPE html>
 <html lang="de">
@@ -1040,6 +1108,14 @@ def generate_html(grundstuecke: list[dict], beteiligungen: list[dict],
   <div class="card"><div class="val">{len(beteiligungen)}</div><div class="lbl">&#128176; Beteiligungen</div></div>
   <div class="card"><div class="val">{avg_epm2}</div><div class="lbl">Ø €/m²</div></div>
   <div class="card"><div class="val">{best_rend}</div><div class="lbl">Beste Rendite</div></div>
+</div>
+
+<h2>&#128221; Review-Status</h2>
+<div class="summary">{review_summary}</div>
+<div class="review-card">
+  <strong>Offene Review-Queue</strong>
+  <div class="review-note" style="margin:8px 0 12px;">Die offenen Deals lassen sich direkt per CLI markieren: <code>python3 investment_scanner.py --review-link "..." --review-status interessant --review-note "..."</code></div>
+  {review_queue}
 </div>
 
 {warn_html}
@@ -1070,6 +1146,18 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Keine externen API-Calls; erzeugt leeren Report für Smoke-Check.",
     )
+    parser.add_argument("--review-link", help="Link des Deals fuer Operator-Review")
+    parser.add_argument(
+        "--review-status",
+        choices=["interessant", "nachfassen", "ignorieren"],
+        help="Operator-Status fuer --review-link",
+    )
+    parser.add_argument("--review-note", default="", help="Optionale Operator-Notiz")
+    parser.add_argument(
+        "--list-review-queue",
+        action="store_true",
+        help="Offene Review-Kandidaten aus der Datenbank ausgeben",
+    )
     return parser.parse_args()
 
 
@@ -1095,6 +1183,30 @@ def _dedupe(items: list[dict]) -> list[dict]:
 
 def main() -> int:
     args = parse_args()
+    if args.review_link or args.list_review_queue:
+        from invest_db import get_review_queue, init_db, save_operator_review
+
+        init_db()
+        if args.list_review_queue:
+            queue = get_review_queue()
+            if not queue:
+                print("Keine offenen Review-Kandidaten.")
+                return 0
+            print("Offene Review-Kandidaten:")
+            for item in queue:
+                title = item.get("title") or "?"
+                score = item.get("ki_score")
+                score_label = f"KI {score:.1f}" if isinstance(score, (int, float)) else "KI –"
+                print(f"- {title} | {item.get('location') or '–'} | {score_label}")
+                print(f"  {item.get('link')}")
+            return 0
+        if not args.review_status:
+            raise SystemExit("--review-status ist erforderlich, wenn --review-link gesetzt ist")
+        if not save_operator_review(args.review_link, args.review_status, args.review_note):
+            raise SystemExit("Kein Deal zu diesem Link gefunden")
+        print(f"Review gespeichert: {args.review_status}")
+        return 0
+
     now      = datetime.now()
     print("=" * 60)
     print(f"  Investment Scanner — {now.strftime('%d.%m.%Y %H:%M')}")
@@ -1166,7 +1278,7 @@ def main() -> int:
 
     # ── DB-Integration ────────────────────────────────────────────────────
     try:
-        from invest_db import init_db, upsert_property, log_scan_run
+        from invest_db import get_review_map, init_db, log_scan_run, upsert_property
         init_db()
         all_items = grundstuecke + beteiligungen
         new_count = 0
@@ -1193,6 +1305,11 @@ def main() -> int:
                 new_count += 1
         log_scan_run(len(all_items), new_count)
         logger.info("DB: %d Einträge, davon %d neu", len(all_items), new_count)
+        review_map = get_review_map([item.get("link", "") for item in all_items])
+        for item in all_items:
+            review = review_map.get(item.get("link", ""))
+            if review:
+                item.update(review)
     except ImportError:
         logger.warning("invest_db nicht verfügbar — DB-Integration übersprungen")
     except Exception as e:

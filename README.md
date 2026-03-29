@@ -49,9 +49,30 @@ oder
 bash run_scanner.sh
 ```
 
+Review-Queue anzeigen:
+
+```bash
+python3 investment_scanner.py --list-review-queue
+```
+
+Deal markieren:
+
+```bash
+python3 investment_scanner.py \
+  --review-link "https://example.com/deal" \
+  --review-status interessant \
+  --review-note "Nur bei belastbarer Vermietung weiter prüfen"
+```
+
 ## Output
 
 Das Repo erzeugt Report-Dateien unter `output/YYYY-MM-DD/`, sofern der Scanner erfolgreich durchlaeuft.
+
+Der HTML-Report enthaelt zusaetzlich:
+
+- Review-Zusammenfassung mit offenen / interessanten / nachzufassenden / ignorierten Deals
+- offene Review-Queue fuer Operatoren
+- Review-Status und Notiz direkt in den Deal-Tabellen
 
 ## Betriebshinweise
 

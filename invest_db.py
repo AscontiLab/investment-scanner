@@ -6,6 +6,8 @@ from pathlib import Path
 
 DB_PATH = Path(__file__).parent / "invest.db"
 
+REVIEW_STATUSES = ("interessant", "nachfassen", "ignorieren")
+
 
 def _connect():
     conn = sqlite3.connect(str(DB_PATH))
@@ -54,7 +56,19 @@ def init_db():
                 ki_scored_at TEXT
             )
         """)
+        _ensure_column(conn, "properties", "catalog_text", "TEXT")
+        _ensure_column(conn, "properties", "operator_status", "TEXT")
+        _ensure_column(conn, "properties", "operator_note", "TEXT")
+        _ensure_column(conn, "properties", "operator_updated_at", "TEXT")
         conn.commit()
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    """Legt eine fehlende Spalte per ALTER TABLE an."""
+    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    existing = {row["name"] if isinstance(row, sqlite3.Row) else row[1] for row in rows}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def log_scan_run(source_count: int, new_count: int) -> int:
@@ -126,6 +140,7 @@ def get_all_properties(
     category: str = None,
     region: str = None,
     min_score: float = None,
+    operator_status: str = None,
 ) -> list[dict]:
     """Alle Objekte mit optionalen Filtern."""
     query = "SELECT * FROM properties WHERE 1=1"
@@ -143,6 +158,12 @@ def get_all_properties(
     if min_score is not None:
         query += " AND ki_score >= ?"
         params.append(min_score)
+    if operator_status is not None:
+        if operator_status == "offen":
+            query += " AND (operator_status IS NULL OR operator_status = '')"
+        else:
+            query += " AND operator_status = ?"
+            params.append(operator_status)
 
     query += " ORDER BY last_seen DESC, ki_score DESC"
 
@@ -209,6 +230,12 @@ def get_stats() -> dict:
             "SELECT region, COUNT(*) as cnt FROM properties GROUP BY region ORDER BY cnt DESC"
         ).fetchall()
         by_region = {row["region"] or "Unbekannt": row["cnt"] for row in by_region_rows}
+        review_rows = conn.execute(
+            """SELECT COALESCE(NULLIF(operator_status, ''), 'offen') as status, COUNT(*) as cnt
+               FROM properties
+               GROUP BY COALESCE(NULLIF(operator_status, ''), 'offen')"""
+        ).fetchall()
+        by_review = {row["status"]: row["cnt"] for row in review_rows}
 
     return {
         "total": total,
@@ -217,7 +244,64 @@ def get_stats() -> dict:
         "nachverkauf_count": nachverkauf_count,
         "by_category": by_category,
         "by_region": by_region,
+        "by_review": by_review,
     }
+
+
+def save_operator_review(link: str, status: str, note: str = "") -> bool:
+    """Speichert einen Operator-Status fuer ein Objekt."""
+    if status not in REVIEW_STATUSES:
+        raise ValueError(f"Ungültiger Review-Status: {status}")
+    updated_at = datetime.now().strftime("%Y-%m-%d %H:%M")
+    with _connect() as conn:
+        cur = conn.execute(
+            """UPDATE properties
+               SET operator_status = ?, operator_note = ?, operator_updated_at = ?
+               WHERE link = ?""",
+            (status, note or None, updated_at, link),
+        )
+        conn.commit()
+        return cur.rowcount > 0
+
+
+def get_review_queue(limit: int = 15) -> list[dict]:
+    """Liefert die wichtigsten offenen Deals fuer den Operator-Review."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT *
+               FROM properties
+               WHERE operator_status IS NULL OR operator_status = ''
+               ORDER BY
+                 CASE WHEN ki_score IS NULL THEN 1 ELSE 0 END,
+                 ki_score DESC,
+                 last_seen DESC
+               LIMIT ?""",
+            (limit,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_review_map(links: list[str]) -> dict[str, dict]:
+    """Liefert Review-Metadaten fuer eine Liste von Links."""
+    clean_links = [link for link in links if link]
+    if not clean_links:
+        return {}
+    placeholders = ", ".join("?" for _ in clean_links)
+    with _connect() as conn:
+        rows = conn.execute(
+            f"""SELECT link, operator_status, operator_note, operator_updated_at
+                FROM properties
+                WHERE link IN ({placeholders})""",
+            clean_links,
+        ).fetchall()
+        return {
+            row["link"]: {
+                "operator_status": row["operator_status"],
+                "operator_note": row["operator_note"],
+                "operator_updated_at": row["operator_updated_at"],
+            }
+            for row in rows
+        }
 
 
 # DB beim Import initialisieren
