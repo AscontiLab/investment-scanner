@@ -2,7 +2,7 @@
 
 ## Ueberblick
 
-Kompakte Variante des Investment-Scanners fuer Grundstuecke und Crowdfunding-Deals. Das Repo konzentriert sich auf die Einzeldatei-Implementierung mit Report-Ausgabe und einfachem Wrapper-Skript.
+Taeglich laufender Scanner fuer Grundstuecke und Crowdfunding-Deals mit SQLite-Datenbank, DGA-Katalog-Extraktion und HTML/CSV-Reporting.
 
 ## Zweck
 
@@ -14,10 +14,14 @@ Kompakte Variante des Investment-Scanners fuer Grundstuecke und Crowdfunding-Dea
 
 - `investment_scanner.py`
   - Hauptlogik fuer Scan und Report
-- `run_scanner.sh`
-  - Wrapper fuer den periodischen Betrieb
+- `invest_db.py`
+  - SQLite-Datenbankmodul (Deal-Tracking, Review-Queue)
+- `dga_catalog.py`
+  - DGA Katalog-Extraktor (Katalog-PDFs → Objektdetails)
 - `send_report.py`
   - E-Mail-Versand
+- `run_scanner.sh`
+  - Wrapper fuer den periodischen Betrieb
 
 ## Voraussetzungen
 
@@ -28,7 +32,7 @@ Kompakte Variante des Investment-Scanners fuer Grundstuecke und Crowdfunding-Dea
 ## Einrichtung
 
 ```bash
-cd /home/claude-agent/investment_scanner
+cd /home/claude-agent/investment-scanner
 pip install requests beautifulsoup4
 ```
 
@@ -74,11 +78,13 @@ Der HTML-Report enthaelt zusaetzlich:
 - offene Review-Queue fuer Operatoren
 - Review-Status und Notiz direkt in den Deal-Tabellen
 
-## Betriebshinweise
+## Cron
 
-- Diese Variante ist die schlankere Einzelrepo-Ausfuehrung ohne weitergehende Dokuordner
-- Fuer produktiven Betrieb sollte ein gemeinsamer, dokumentierter Credential- und Cron-Standard verwendet werden
+```cron
+# Taeglich 06:00 UTC
+0 6 * * * cd /home/claude-agent/investment-scanner && /usr/bin/python3 investment_scanner.py >> logs/scanner.log 2>&1
+```
 
-## Status
+## Unified Dashboard
 
-Leichte Einzeldatei-Variante des Investment-Scanners.
+Eingebunden unter `https://agents.umzwei.de/dashboard/invest/`.
