@@ -21,13 +21,19 @@ Taeglich laufender Scanner fuer Grundstuecke und Crowdfunding-Deals mit SQLite-D
 - `send_report.py`
   - E-Mail-Versand
 - `run_scanner.sh`
-  - Wrapper fuer den periodischen Betrieb
+  - Wrapper fuer den periodischen Betrieb (nutzt portablen Pfad via `$(dirname)`)
+
 
 ## Voraussetzungen
 
 - Python 3.10+
+- `scanner-common` als pip-Paket (nicht mehr lokale Kopie)
 - `requests`
 - `beautifulsoup4`
+
+## Sicherheit
+
+- SQL Injection Fix: `_validate_identifier()` in `invest_db.py` validiert dynamische Tabellen-/Spaltennamen
 
 ## Einrichtung
 
