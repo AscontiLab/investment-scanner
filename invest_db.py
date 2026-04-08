@@ -1,5 +1,6 @@
 """SQLite-Datenbankmodul fuer den Investment Scanner."""
 
+import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -63,8 +64,17 @@ def init_db():
         conn.commit()
 
 
+def _validate_identifier(name: str) -> str:
+    """Prueft ob ein SQL-Identifier (Tabelle/Spalte) sicher ist."""
+    if not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", name):
+        raise ValueError(f"Ungueltiger SQL-Identifier: {name!r}")
+    return name
+
+
 def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
     """Legt eine fehlende Spalte per ALTER TABLE an."""
+    _validate_identifier(table)
+    _validate_identifier(column)
     rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
     existing = {row["name"] if isinstance(row, sqlite3.Row) else row[1] for row in rows}
     if column not in existing:
