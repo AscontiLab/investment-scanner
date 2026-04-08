@@ -7,31 +7,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
 
-CREDS_FILE = Path.home() / ".stock_scanner_credentials"
-
-
-def load_creds() -> dict:
-    """Liest Credentials aus der gemeinsamen Scanner-Credentials-Datei."""
-    creds = {}
-    if not CREDS_FILE.exists():
-        print(f"Fehler: Credentials-Datei fehlt: {CREDS_FILE}", file=sys.stderr)
-        return {}
-    with open(CREDS_FILE) as f:
-        for line in f:
-            line = line.strip()
-            if "=" in line and not line.startswith("#"):
-                k, v = line.split("=", 1)
-                creds[k.strip()] = v.strip()
-    return creds
-
-
-def require_keys(creds: dict, keys: list[str]) -> bool:
-    """Prüft, ob alle erforderlichen Keys vorhanden sind."""
-    missing = [k for k in keys if not creds.get(k)]
-    if missing:
-        print(f"Fehler: Fehlende Credentials: {', '.join(missing)}", file=sys.stderr)
-        return False
-    return True
+from scanner_common import load_credentials, require_keys
 
 
 def find_latest_report() -> Path | None:
@@ -41,7 +17,7 @@ def find_latest_report() -> Path | None:
 
 
 def main() -> int:
-    creds = load_creds()
+    creds = load_credentials()
     if not require_keys(creds, ["GMAIL_USER", "GMAIL_APP_PASSWORD", "GMAIL_RECIPIENT"]):
         return 1
 
