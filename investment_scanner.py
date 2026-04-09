@@ -1158,6 +1158,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Offene Review-Kandidaten aus der Datenbank ausgeben",
     )
+    parser.add_argument(
+        "--score",
+        action="store_true",
+        help="Nur KI-Scoring ausfuehren (kein Scan)",
+    )
+    parser.add_argument(
+        "--score-all",
+        action="store_true",
+        help="Alle Properties neu bewerten (Scores zuruecksetzen)",
+    )
     return parser.parse_args()
 
 
@@ -1183,6 +1193,19 @@ def _dedupe(items: list[dict]) -> list[dict]:
 
 def main() -> int:
     args = parse_args()
+    # ── KI-Scoring-Only-Modus ──────────────────────────────────────────────
+    if args.score or args.score_all:
+        try:
+            from ki_scorer import rescore_all, score_properties
+            if args.score_all:
+                scored = rescore_all(limit=100)
+            else:
+                scored = score_properties()
+            print(f"[KI] {scored} Properties bewertet")
+        except Exception as e:
+            print(f"[KI] Fehler beim Scoring: {e}")
+        return 0
+
     if args.review_link or args.list_review_queue:
         from invest_db import get_review_queue, init_db, save_operator_review
 
@@ -1314,6 +1337,15 @@ def main() -> int:
         logger.warning("invest_db nicht verfügbar — DB-Integration übersprungen")
     except Exception as e:
         logger.warning("DB-Integration Fehler: %s", e)
+
+    # ── KI-Scoring (automatisch nach Scan) ──────────────────────────────
+    try:
+        from ki_scorer import score_properties as ki_score_properties
+        scored = ki_score_properties(limit=20)
+        print(f"[KI] {scored} Properties bewertet")
+    except Exception as e:
+        logger.warning("KI-Scoring Fehler: %s", e)
+        print(f"[KI] Scoring uebersprungen: {e}")
 
     html      = generate_html(grundstuecke, beteiligungen, warnings)
     html_path = out_dir / "investments.html"
