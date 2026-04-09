@@ -91,6 +91,20 @@ Der HTML-Report enthaelt zusaetzlich:
 0 6 * * * cd /home/claude-agent/investment-scanner && /usr/bin/python3 investment_scanner.py >> logs/scanner.log 2>&1
 ```
 
+## KI-Scoring via Gemma 4 (2026-04-09)
+
+- Automatische Immobilien-Bewertung via Ollama (`gemma4:e4b`, lokal)
+- Score 0-10 mit Headline, Analyse, Staerken/Schwaechen, Risiko-Einschaetzung
+- Laeuft nach jedem Scan (max 20 pro Batch), ~10s pro Bewertung
+- Ollama Chat-API: `http://172.28.0.20:11434`
+
+### CLI-Optionen
+
+```bash
+python3 investment_scanner.py --score        # Nur scoren (kein Scan)
+python3 investment_scanner.py --score-all    # Alle Objekte neu bewerten
+```
+
 ## Unified Dashboard
 
 Eingebunden unter `https://agents.umzwei.de/dashboard/invest/`.
