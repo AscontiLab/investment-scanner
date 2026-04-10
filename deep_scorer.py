@@ -143,24 +143,41 @@ def _fetch_dga_detail(prop: dict, session: requests.Session) -> str:
         detail = dga_session.get(link, timeout=15)
         soup = BeautifulSoup(detail.text, "html.parser")
 
-        # HTML-Beschreibungstext extrahieren
-        desc_sections = soup.select(".ce-bodytext, .csc-default, .tx-dga-detail")
+        # HTML-Beschreibungstext extrahieren (verschiedene DGA-Layouts)
+        desc_sections = soup.select(".ce-bodytext, .csc-default, .tx-dga-detail, .tx-dga-immobilien")
         for sec in desc_sections:
             text = sec.get_text(" ", strip=True)
             if len(text) > 50:
                 parts.append(text)
 
-        # Alle PDF-Links sammeln (Expose, Gutachten, Katalog)
+        # Fallback: Hauptinhalt der Seite wenn keine spezifischen Sections
+        if not parts:
+            main = soup.select_one("#main, .main-content, main, #content")
+            if main:
+                # Script/Style/Nav entfernen
+                for tag in main(["script", "style", "nav", "footer", "header"]):
+                    tag.decompose()
+                text = main.get_text(" ", strip=True)
+                if len(text) > 100:
+                    parts.append(text)
+
+        # Alle PDF-Links sammeln (Expose, Gutachten, Katalog, securedl)
         pdf_links = []
         for a in soup.find_all("a", href=True):
             href = a["href"]
             link_text = a.get_text(strip=True).lower()
-            if ".pdf" in href.lower():
+            if ".pdf" in href.lower() or "/securedl/" in href:
                 if href.startswith("/"):
                     href = "https://www.dga-ag.de" + href
-                label = "expose" if "expos" in link_text else \
-                        "gutachten" if "gutacht" in link_text else \
-                        "katalog" if "katalog" in link_text else "doc"
+                # Label bestimmen
+                if "expos" in link_text or "securedl" in href:
+                    label = "expose"
+                elif "gutacht" in link_text:
+                    label = "gutachten"
+                elif "katalog" in href.lower():
+                    label = "katalog"
+                else:
+                    label = "doc"
                 pdf_links.append((href, label))
 
         # PDFs herunterladen und Text extrahieren
