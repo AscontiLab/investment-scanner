@@ -398,6 +398,7 @@ def main() -> int:
         from scrapers import (
             scrape_kleinanzeigen, scrape_dga, scrape_zvg,
             scrape_bergfuerst, scrape_wiwin, scrape_bettervest, scrape_exporo,
+            scrape_companisto,
         )
         from scrapers.base import make_session
 
@@ -430,6 +431,7 @@ def main() -> int:
                 (scrape_bergfuerst, "Bergfürst"),
                 (scrape_wiwin, "Wiwin"),
                 (scrape_exporo, "Exporo"),
+                (scrape_companisto, "Companisto"),
             ]:
                 time.sleep(PAUSE_S)
                 r = fn(session)
