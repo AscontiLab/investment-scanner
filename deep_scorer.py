@@ -248,20 +248,67 @@ def _fetch_kleinanzeigen_detail(prop: dict, session: requests.Session) -> str:
         return ""
 
 
+def _fetch_generic_detail(prop: dict, session: requests.Session) -> str:
+    """Generischer Fallback: HTML-Seite laden und Haupttext extrahieren."""
+    link = prop.get("link", "")
+    if not link:
+        return ""
+    try:
+        resp = session.get(link, timeout=15)
+        if resp.status_code != 200:
+            return ""
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # Script/Style entfernen
+        for tag in soup(["script", "style", "nav", "footer", "header"]):
+            tag.decompose()
+
+        parts = []
+        # Hauptcontent suchen
+        main = soup.select_one("main, article, .content, .detail, #content")
+        container = main if main else soup.body
+        if container:
+            text = container.get_text("\n", strip=True)
+            if len(text) > 100:
+                parts.append(text)
+
+        # PDF-Links sammeln
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if ".pdf" in href.lower():
+                if href.startswith("/"):
+                    from urllib.parse import urljoin
+                    href = urljoin(link, href)
+                if href.startswith("http"):
+                    pdf_path = _download_pdf(session, href, prefix="generic")
+                    if pdf_path:
+                        pdf_text = _extract_pdf_text(pdf_path)
+                        if len(pdf_text) > 100:
+                            parts.append(f"--- PDF ---\n{pdf_text}")
+
+        return "\n\n".join(parts)
+    except Exception as e:
+        logger.warning("Generic Detail-Fehler (%s): %s", link[:60], e)
+        return ""
+
+
 def fetch_detail_text(prop: dict, session: requests.Session) -> str:
     """Dispatcht zum richtigen Fetcher basierend auf der Quelle."""
     source = (prop.get("source") or "").lower()
     link = (prop.get("link") or "").lower()
 
-    if "dga" in source or "dga" in link:
-        return _fetch_dga_detail(prop, session)
+    if "dga" in source or "dga-ag" in link or "diia.de" in link:
+        text = _fetch_dga_detail(prop, session)
+        # Fallback auf generisch wenn DGA-Fetcher nichts findet (z.B. diia.de)
+        if len(text) < 100:
+            text = _fetch_generic_detail(prop, session)
+        return text
     elif "zwangsversteigerung" in source or "zvg" in link:
         return _fetch_zvg_detail(prop, session)
     elif "kleinanzeigen" in source or "kleinanzeigen" in link:
         return _fetch_kleinanzeigen_detail(prop, session)
     else:
-        logger.info("Kein Detail-Fetcher fuer Quelle '%s'", source)
-        return ""
+        return _fetch_generic_detail(prop, session)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
