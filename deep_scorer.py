@@ -463,6 +463,46 @@ def _validate_deep_result(result: dict) -> dict | None:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# TELEGRAM-ALERT
+# ═══════════════════════════════════════════════════════════════════════════════
+
+DEEP_ALERT_THRESHOLD = 7.0
+
+
+def _send_deep_alert(prop: dict, result: dict) -> None:
+    """Sendet Telegram-Alert wenn Deep Score >= Schwellenwert."""
+    score = result.get("score", 0)
+    if score < DEEP_ALERT_THRESHOLD:
+        return
+
+    title = prop.get("title") or "Unbekannt"
+    link = prop.get("link") or ""
+    price = prop.get("price")
+    location = prop.get("location") or prop.get("region") or ""
+    headline = result.get("headline", "")
+    risk = result.get("risk", "")
+    ki_score = prop.get("ki_score")
+
+    price_str = f"{price:,.0f} EUR".replace(",", ".") if price else "—"
+    ki_str = f"KI {ki_score:.1f} → " if ki_score is not None else ""
+
+    text = (
+        f"<b>🔍 Deep Score {score:.1f}/10</b> ({ki_str}Risiko: {risk})\n\n"
+        f"<b>{title[:80]}</b>\n"
+        f"📍 {location}\n"
+        f"💰 {price_str}\n\n"
+        f"<i>{headline[:200]}</i>\n\n"
+        f"<a href=\"{link}\">→ Objekt ansehen</a>"
+    )
+
+    try:
+        from scanner_common import send_alert
+        send_alert(text)
+    except Exception as e:
+        logger.warning("Telegram-Alert fehlgeschlagen: %s", e)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # HAUPT-FUNKTIONEN
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -550,6 +590,7 @@ def deep_score_auto(min_ki_score: float = None, limit: int = None) -> int:
                     f"  [Deep] {i}/{len(candidates)}: "
                     f"{(prop.get('title') or '?')[:50]} -> {result['score']:.1f} ({result['risk']})"
                 )
+                _send_deep_alert(prop, result)
             else:
                 print(f"  [Deep] {i}/{len(candidates)}: uebersprungen")
 
@@ -577,6 +618,7 @@ def deep_score_by_link(link: str) -> int:
         save_deep_score(link, result)
         print(f"[Deep] Score: {result['score']:.1f} ({result['risk']})")
         print(f"[Deep] {result.get('headline', '')}")
+        _send_deep_alert(prop, result)
         return 1
     else:
         print("[Deep] Deep-Scoring fehlgeschlagen (keine Dokumente oder Modell-Fehler)")
