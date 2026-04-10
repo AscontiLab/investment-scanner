@@ -61,6 +61,11 @@ def init_db():
         _ensure_column(conn, "properties", "operator_status", "TEXT")
         _ensure_column(conn, "properties", "operator_note", "TEXT")
         _ensure_column(conn, "properties", "operator_updated_at", "TEXT")
+        # Beteiligungsfelder
+        _ensure_column(conn, "properties", "rendite_pct", "REAL")
+        _ensure_column(conn, "properties", "laufzeit", "TEXT")
+        _ensure_column(conn, "properties", "min_anlage_eur", "INTEGER")
+        _ensure_column(conn, "properties", "typ", "TEXT")
         # Deep Scoring (Stufe 2)
         _ensure_column(conn, "properties", "deep_score", "REAL")
         _ensure_column(conn, "properties", "deep_headline", "TEXT")
@@ -117,6 +122,7 @@ def upsert_property(prop: dict) -> bool:
                 "source", "company", "title", "location", "region",
                 "price", "area_m2", "price_per_m2", "category", "category_code",
                 "status", "rented", "monument", "auction_number", "catalog_text",
+                "rendite_pct", "laufzeit", "min_anlage_eur", "typ",
             ]
             updates = ["last_seen = ?"]
             values = [today]
@@ -137,6 +143,7 @@ def upsert_property(prop: dict) -> bool:
                 "link", "source", "company", "title", "location", "region",
                 "price", "area_m2", "price_per_m2", "category", "category_code",
                 "status", "rented", "monument", "auction_number",
+                "rendite_pct", "laufzeit", "min_anlage_eur", "typ",
                 "first_seen", "last_seen",
             ]
             prop["first_seen"] = today

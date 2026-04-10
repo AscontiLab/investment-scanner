@@ -50,9 +50,66 @@ Das Feld "risk" muss einen dieser Werte haben: "niedrig", "mittel", "hoch".
 Der "score" muss eine Zahl zwischen 0 und 10 sein (Dezimalzahlen erlaubt).\
 """
 
+SYSTEM_PROMPT_BETEILIGUNG = """\
+Du bist ein erfahrener Finanzanalyst und bewertest Crowdfunding-Beteiligungen und Startup-Investments.
+
+Bewerte das folgende Investment auf einer Skala von 0 bis 10:
+- 0-2: Unattraktiv (hohes Risiko, schlechte Konditionen, fragwuerdiges Geschaeftsmodell)
+- 3-4: Unterdurchschnittlich (einige Risiken ueberwiegen die Chancen)
+- 5-6: Durchschnittlich (solide Konditionen, moderates Risiko)
+- 7-8: Attraktiv (gute Rendite/Wachstum, starkes Team, ueberzeugender Markt)
+- 9-10: Top-Investment (herausragendes Chance-Risiko-Verhaeltnis)
+
+Wichtige Kriterien fuer Crowdfunding/Immobilien-Beteiligungen:
+- Rendite p.a. im Vergleich zum Markt (5-7% solide, 8-10% gut, >10% kritisch pruefen)
+- Laufzeit und Liquiditaet (kuerzere Laufzeit = weniger Risiko)
+- Plattform-Reputation und Track Record
+- Besicherung und Nachrangigkeit
+- Projektqualitaet und Standort
+
+Zusaetzliche Kriterien fuer Startup-Investments:
+- Geschaeftsmodell und Skalierbarkeit
+- Marktgroesse und Wettbewerb
+- Team und Track Record
+- Traction (Umsatz, Kunden, Patente)
+- Bewertung und Funding-Fortschritt
+- Exit-Perspektive
+
+Antworte AUSSCHLIESSLICH als valides JSON ohne Markdown-Formatierung, ohne Code-Bloecke.
+Das JSON muss exakt dieses Format haben:
+{
+  "score": 7.5,
+  "headline": "Kurze praegnante Bewertung in einem Satz",
+  "analysis": "2-3 Saetze detaillierte Analyse",
+  "strengths": ["Staerke 1", "Staerke 2"],
+  "weaknesses": ["Schwaeche 1", "Schwaeche 2"],
+  "recommendation": "Investmentempfehlung oder Warnung in einem Satz",
+  "risk": "niedrig"
+}
+
+Das Feld "risk" muss einen dieser Werte haben: "niedrig", "mittel", "hoch".
+Der "score" muss eine Zahl zwischen 0 und 10 sein (Dezimalzahlen erlaubt).\
+"""
+
+# Quellen die als Beteiligung gelten
+_BETEILIGUNG_SOURCES = {"bergfürst", "bergfuerst", "wiwin", "bettervest", "exporo", "companisto"}
+
+
+def _is_beteiligung(prop: dict) -> bool:
+    """Prueft ob ein Objekt eine Beteiligung ist (vs. Grundstueck)."""
+    source = (prop.get("source") or "").lower()
+    return any(s in source for s in _BETEILIGUNG_SOURCES)
+
 
 def _build_user_prompt(prop: dict) -> str:
-    """Erstellt den User-Prompt mit allen verfuegbaren Objektdaten."""
+    """Erstellt den User-Prompt — unterscheidet Grundstuecke vs. Beteiligungen."""
+    if _is_beteiligung(prop):
+        return _build_beteiligung_prompt(prop)
+    return _build_grundstueck_prompt(prop)
+
+
+def _build_grundstueck_prompt(prop: dict) -> str:
+    """Prompt fuer Grundstuecke/Immobilien."""
     parts = ["Bewerte dieses Immobilien-Objekt:\n"]
 
     if prop.get("title"):
@@ -82,19 +139,53 @@ def _build_user_prompt(prop: dict) -> str:
     if prop.get("auction_number"):
         parts.append(f"Aktenzeichen: {prop['auction_number']}")
     if prop.get("catalog_text"):
-        # Katalogtext kuerzen falls sehr lang
         text = prop["catalog_text"][:1500]
         parts.append(f"Objektbeschreibung:\n{text}")
 
     return "\n".join(parts)
 
 
-def _call_ollama(user_prompt: str, retry: bool = True) -> dict | None:
+def _build_beteiligung_prompt(prop: dict) -> str:
+    """Prompt fuer Crowdfunding-Beteiligungen und Startup-Investments."""
+    parts = ["Bewerte dieses Investment:\n"]
+
+    if prop.get("title"):
+        parts.append(f"Projekt: {prop['title']}")
+    if prop.get("source"):
+        parts.append(f"Plattform: {prop['source']}")
+    if prop.get("location"):
+        parts.append(f"Standort: {prop['location']}")
+    if prop.get("category"):
+        parts.append(f"Typ: {prop['category']}")
+
+    # Beteiligungsfelder aus der DB (via upsert_property durchgereicht)
+    for key, label in [
+        ("rendite_pct", "Rendite p.a."),
+        ("laufzeit", "Laufzeit"),
+        ("min_anlage_eur", "Mindestanlage"),
+        ("typ", "Investmenttyp"),
+    ]:
+        val = prop.get(key)
+        if val:
+            if key == "rendite_pct":
+                parts.append(f"{label}: {val} %")
+            elif key == "min_anlage_eur":
+                parts.append(f"{label}: {val:,.0f} EUR".replace(",", "."))
+            else:
+                parts.append(f"{label}: {val}")
+
+    if prop.get("status"):
+        parts.append(f"Status: {prop['status']}")
+
+    return "\n".join(parts)
+
+
+def _call_ollama(user_prompt: str, retry: bool = True, system_prompt: str = None) -> dict | None:
     """Ruft Ollama Chat-API auf und parst die JSON-Antwort."""
     payload = {
         "model": MODEL,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt or SYSTEM_PROMPT},
             {"role": "user", "content": user_prompt},
         ],
         "stream": False,
@@ -135,7 +226,7 @@ def _call_ollama(user_prompt: str, retry: bool = True) -> dict | None:
                 "Kein Markdown, keine Code-Bloecke, kein zusaetzlicher Text."
             )
             time.sleep(1)
-            return _call_ollama(retry_prompt, retry=False)
+            return _call_ollama(retry_prompt, retry=False, system_prompt=system_prompt)
         print(f"  [KI] JSON-Parse-Fehler auch nach Retry. Antwort: {content[:200]}")
         return None
 
@@ -198,7 +289,8 @@ def score_properties(limit: int = SCORING_BATCH_SIZE) -> int:
         short_title = title[:50]
 
         user_prompt = _build_user_prompt(prop)
-        result = _call_ollama(user_prompt)
+        sys_prompt = SYSTEM_PROMPT_BETEILIGUNG if _is_beteiligung(prop) else SYSTEM_PROMPT
+        result = _call_ollama(user_prompt, system_prompt=sys_prompt)
 
         if result is None:
             print(f"  [KI] {i}/{len(properties)} FEHLER: {short_title}")
