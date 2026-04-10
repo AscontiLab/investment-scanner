@@ -148,10 +148,22 @@ def _build_review_queue(items: list[dict]) -> str:
     return f'<div class="review-grid">{"".join(parts)}</div>'
 
 
+def _score_badge(ki_score, deep_score) -> str:
+    """Erzeugt KI-Score + Deep-Score Badge."""
+    parts = []
+    if isinstance(ki_score, (int, float)):
+        color = "#1a7a30" if ki_score >= 7 else "#1a56a0" if ki_score >= 5 else "#b02525"
+        parts.append(f'<span style="color:{color};font-weight:700">KI {ki_score:.1f}</span>')
+    if isinstance(deep_score, (int, float)):
+        color = "#1a7a30" if deep_score >= 7 else "#1a56a0" if deep_score >= 5 else "#b02525"
+        parts.append(f'<span class="tag2" style="font-size:0.7em">Deep {deep_score:.1f}</span>')
+    return " ".join(parts) if parts else "–"
+
+
 def build_grundstuecke_table(items: list[dict]) -> str:
     if not items:
         return '<div class="empty">Keine Grundstücke gefunden.</div>'
-    headers = ["Quelle", "Titel", "Ort", "Fläche", "Preis", "€/m²", "Review", "Nutzungsidee", "Link"]
+    headers = ["Quelle", "Titel", "Ort", "Fläche", "Preis", "€/m²", "Score", "Review", "Link"]
     row_parts = []
     for b in sorted(items, key=lambda x: x.get("preis_eur") or 999_999):
         flaeche = f"{b['flaeche_m2']:,} m²".replace(",", ".") if b.get("flaeche_m2") else "–"
@@ -159,6 +171,10 @@ def build_grundstuecke_table(items: list[dict]) -> str:
         epm2 = f"{b['eur_pro_m2']:.1f}".replace(".", ",") if b.get("eur_pro_m2") else "–"
         href = _safe_href(b['link'])
         review_note = escape(b.get("operator_note") or "")
+        score_html = _score_badge(b.get("ki_score"), b.get("deep_score"))
+        deep_hint = ""
+        if b.get("deep_headline"):
+            deep_hint = f'<div class="review-note">{escape(b["deep_headline"][:100])}</div>'
         row_parts.append(f"""<tr>
           <td>{_quelle_tag(b['quelle'])}</td>
           <td><strong>{escape(b['titel'][:80])}</strong></td>
@@ -166,8 +182,8 @@ def build_grundstuecke_table(items: list[dict]) -> str:
           <td>{flaeche}</td>
           <td>{preis}</td>
           <td>{epm2}</td>
+          <td>{score_html}{deep_hint}</td>
           <td>{_review_badge(b.get('operator_status'))}{f'<div class="review-note">{review_note}</div>' if review_note else ''}</td>
-          <td style="color:#555577;font-size:0.82em">{escape(b.get('nutzung', '–'))}</td>
           <td><a href="{href}" target="_blank" rel="noopener noreferrer">→ Inserat</a></td>
         </tr>""")
     rows = "".join(row_parts)
@@ -281,6 +297,10 @@ def parse_args() -> argparse.Namespace:
                         help="Nur KI-Scoring ausfuehren (kein Scan)")
     parser.add_argument("--score-all", action="store_true",
                         help="Alle Properties neu bewerten")
+    parser.add_argument("--deep-score", action="store_true",
+                        help="Deep-Scoring: Dokumente laden + neu bewerten (Score >= 7)")
+    parser.add_argument("--deep-score-link", type=str, default=None,
+                        help="Deep-Scoring fuer ein bestimmtes Objekt (URL)")
     return parser.parse_args()
 
 
@@ -306,6 +326,19 @@ def _dedupe(items: list[dict]) -> list[dict]:
 
 def main() -> int:
     args = parse_args()
+
+    # ── Deep-Scoring-Modus ───────────────────────────────────────────────
+    if args.deep_score or args.deep_score_link:
+        try:
+            from deep_scorer import deep_score_auto, deep_score_by_link
+            if args.deep_score_link:
+                count = deep_score_by_link(args.deep_score_link)
+            else:
+                count = deep_score_auto()
+            print(f"[Deep-KI] {count} Properties deep-scored")
+        except Exception as e:
+            print(f"[Deep-KI] Fehler: {e}")
+        return 0
 
     # ── KI-Scoring-Only-Modus ──────────────────────────────────────────────
     if args.score or args.score_all:
@@ -464,6 +497,15 @@ def main() -> int:
     except Exception as e:
         logger.warning("KI-Scoring Fehler: %s", e)
         print(f"[KI] Scoring uebersprungen: {e}")
+
+    # ── Deep Scoring (automatisch fuer top-bewertete Objekte) ──────────────
+    try:
+        from deep_scorer import deep_score_auto
+        deep_count = deep_score_auto()
+        print(f"[Deep-KI] {deep_count} Properties deep-scored")
+    except Exception as e:
+        logger.warning("Deep-Scoring Fehler: %s", e)
+        print(f"[Deep-KI] Deep-Scoring uebersprungen: {e}")
 
     html = generate_html(grundstuecke, beteiligungen, warnings)
     html_path = out_dir / "investments.html"

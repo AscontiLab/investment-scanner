@@ -61,6 +61,13 @@ def init_db():
         _ensure_column(conn, "properties", "operator_status", "TEXT")
         _ensure_column(conn, "properties", "operator_note", "TEXT")
         _ensure_column(conn, "properties", "operator_updated_at", "TEXT")
+        # Deep Scoring (Stufe 2)
+        _ensure_column(conn, "properties", "deep_score", "REAL")
+        _ensure_column(conn, "properties", "deep_headline", "TEXT")
+        _ensure_column(conn, "properties", "deep_analysis", "TEXT")
+        _ensure_column(conn, "properties", "deep_risk", "TEXT")
+        _ensure_column(conn, "properties", "deep_scored_at", "TEXT")
+        _ensure_column(conn, "properties", "deep_document_text", "TEXT")
         conn.commit()
 
 
@@ -299,7 +306,8 @@ def get_review_map(links: list[str]) -> dict[str, dict]:
     placeholders = ", ".join("?" for _ in clean_links)
     with _connect() as conn:
         rows = conn.execute(
-            f"""SELECT link, operator_status, operator_note, operator_updated_at
+            f"""SELECT link, operator_status, operator_note, operator_updated_at,
+                       ki_score, deep_score, deep_headline
                 FROM properties
                 WHERE link IN ({placeholders})""",
             clean_links,
@@ -309,9 +317,56 @@ def get_review_map(links: list[str]) -> dict[str, dict]:
                 "operator_status": row["operator_status"],
                 "operator_note": row["operator_note"],
                 "operator_updated_at": row["operator_updated_at"],
+                "ki_score": row["ki_score"],
+                "deep_score": row["deep_score"],
+                "deep_headline": row["deep_headline"],
             }
             for row in rows
         }
+
+
+def get_deep_score_candidates(min_ki_score: float = 7.0, limit: int = 10) -> list[dict]:
+    """Properties mit hohem KI-Score die noch kein Deep Scoring haben."""
+    with _connect() as conn:
+        rows = conn.execute(
+            """SELECT * FROM properties
+               WHERE ki_score >= ? AND deep_score IS NULL
+               ORDER BY ki_score DESC LIMIT ?""",
+            (min_ki_score, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+
+def get_property_by_link(link: str) -> dict | None:
+    """Ein Objekt anhand des Links laden."""
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM properties WHERE link = ?", (link,)
+        ).fetchone()
+        return dict(row) if row else None
+
+
+def save_deep_score(link: str, result: dict) -> bool:
+    """Speichert Deep-Score-Ergebnis fuer ein Objekt."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    with _connect() as conn:
+        cur = conn.execute(
+            """UPDATE properties
+               SET deep_score = ?, deep_headline = ?, deep_analysis = ?,
+                   deep_risk = ?, deep_scored_at = ?, deep_document_text = ?
+               WHERE link = ?""",
+            (
+                result["score"],
+                result.get("headline", ""),
+                result.get("analysis", ""),
+                result.get("risk", "mittel"),
+                today,
+                result.get("document_text", ""),
+                link,
+            ),
+        )
+        conn.commit()
+        return cur.rowcount > 0
 
 
 # DB beim Import initialisieren

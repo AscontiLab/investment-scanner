@@ -41,6 +41,20 @@ ollama:
   timeout: 120            # Sekunden
   pause: 2                # Sekunden zwischen Aufrufen
 
+# Deep Scoring (Stufe 2 — Dokumente laden + neu bewerten)
+deep_scoring:
+  model_strategy: auto        # auto | gemma | claude
+  min_ki_score: 7.0           # Auto-Trigger ab diesem Score
+  batch_size: 10              # Max pro automatischem Lauf
+  max_text_gemma: 6000        # Max Zeichen fuer Gemma
+  max_text_claude: 20000      # Max Zeichen fuer Claude
+  num_predict_gemma: 600      # Ollama Token-Limit
+  claude_model: "claude-sonnet-4-20250514"
+  claude_categories:          # Immer Claude bei diesen Kategorien
+    - Mehrfamilienhaus
+    - Gewerbe
+    - Sonderobjekt
+
 # ZVG Bundeslaender (Name → land_abk Code)
 zvg_bundeslaender:
   Berlin: be
