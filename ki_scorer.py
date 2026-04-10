@@ -10,17 +10,12 @@ from datetime import datetime
 
 import requests
 
+from config import OLLAMA_URL, OLLAMA_MODEL, SCORING_BATCH_SIZE, OLLAMA_TIMEOUT, OLLAMA_PAUSE
 from invest_db import _connect
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# KONFIGURATION
-# ═══════════════════════════════════════════════════════════════════════════════
-
-OLLAMA_URL = "http://172.28.0.20:11434"
-MODEL = "gemma4:e4b"
-SCORING_BATCH_SIZE = 20  # Max pro Lauf
-REQUEST_TIMEOUT = 120  # Sekunden Timeout fuer Ollama-Anfragen
-PAUSE_BETWEEN_CALLS = 2  # Sekunden Pause zwischen Aufrufen
+MODEL = OLLAMA_MODEL
+REQUEST_TIMEOUT = OLLAMA_TIMEOUT
+PAUSE_BETWEEN_CALLS = OLLAMA_PAUSE
 
 SYSTEM_PROMPT = """\
 Du bist ein erfahrener Immobilien-Analyst und bewertest Grundstuecke und Investmentobjekte.

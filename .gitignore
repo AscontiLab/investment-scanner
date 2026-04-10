@@ -6,3 +6,5 @@ __pycache__/
 invest.db
 backup/
 scanner_common
+cache/
+config.yaml

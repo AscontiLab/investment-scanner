@@ -2,107 +2,107 @@
 
 ## Ueberblick
 
-Taeglich laufender Scanner fuer Grundstuecke und Crowdfunding-Deals mit SQLite-Datenbank, DGA-Katalog-Extraktion und HTML/CSV-Reporting.
+Taeglich laufender Scanner fuer Grundstuecke und Crowdfunding-Deals mit SQLite-Datenbank, DGA-Katalog-Extraktion, KI-Scoring und HTML/CSV-Reporting.
 
 ## Zweck
 
-- Guenstige Grundstuecksangebote aggregieren
-- Crowdfunding-Projekte nach Mindestrendite filtern
+- Guenstige Grundstuecksangebote aggregieren (Kleinanzeigen, DGA, ZVG)
+- Crowdfunding-Projekte nach Mindestrendite filtern (Bergfuerst, Wiwin, Bettervest, Exporo)
 - Ergebnisse als HTML- und CSV-Report bereitstellen
+- KI-Scoring via Ollama (Gemma 4)
 
-## Bestandteile
+## Projektstruktur
 
-- `investment_scanner.py`
-  - Hauptlogik fuer Scan und Report
-- `invest_db.py`
-  - SQLite-Datenbankmodul (Deal-Tracking, Review-Queue)
-- `dga_catalog.py`
-  - DGA Katalog-Extraktor (Katalog-PDFs → Objektdetails)
-- `send_report.py`
-  - E-Mail-Versand
-- `run_scanner.sh`
-  - Wrapper fuer den periodischen Betrieb (nutzt portablen Pfad via `$(dirname)`)
+```
+investment_scanner.py      # Orchestrator: CLI, Report-Erzeugung, DB-Integration
+config.py                  # Laedt config.yaml, stellt Konstanten bereit
+config.yaml                # Zentrale Konfiguration (nicht im Repo, siehe .example)
+config.yaml.example        # Vorlage fuer config.yaml
 
+scrapers/                  # Ein Modul pro Datenquelle
+  __init__.py              # Re-Export aller Scraper
+  base.py                  # Gemeinsame Hilfsfunktionen (Session, Parser, Regex)
+  kleinanzeigen.py         # Kleinanzeigen.de
+  dga.py                   # Deutsche Grundstuecksauktionen AG
+  zvg.py                   # ZVG-Portal (Zwangsversteigerungen)
+  bergfuerst.py            # Bergfuerst Crowdinvesting
+  wiwin.py                 # Wiwin Crowdinvesting
+  bettervest.py            # Bettervest (PV/Energie)
+  exporo.py                # Exporo (Immobilien)
+
+invest_db.py               # SQLite-Datenbankmodul (Deal-Tracking, Review-Queue)
+dga_catalog.py             # DGA Katalog-Extraktor (PDFs → Objektdetails)
+ki_scorer.py               # KI-Scoring via Ollama (Gemma 4)
+send_report.py             # E-Mail-Versand
+run_scanner.sh             # Wrapper fuer Cron
+```
 
 ## Voraussetzungen
 
 - Python 3.10+
-- `scanner-common` als pip-Paket (nicht mehr lokale Kopie)
-- `requests`
-- `beautifulsoup4`
-
-## Sicherheit
-
-- SQL Injection Fix: `_validate_identifier()` in `invest_db.py` validiert dynamische Tabellen-/Spaltennamen
+- `scanner-common` als pip-Paket
+- `requests`, `beautifulsoup4`, `pdfminer.six`, `pyyaml`
 
 ## Einrichtung
 
 ```bash
 cd /home/claude-agent/investment-scanner
-pip install requests beautifulsoup4
+cp config.yaml.example config.yaml
+# config.yaml anpassen (Ollama-URL, Regionen, Preislimits etc.)
 ```
 
 ## Konfiguration
 
-- Scanner-Schwellenwerte liegen direkt in `investment_scanner.py`
-- E-Mail-Zugangsdaten werden ueber `~/.stock_scanner_credentials` gelesen
+Alle Schwellenwerte und Einstellungen liegen in `config.yaml`:
+
+| Parameter | Beschreibung | Default |
+|-----------|-------------|---------|
+| `max_price` | Maximalpreis Grundstuecke (EUR) | 50.000 |
+| `min_rendite` | Mindestrendite Crowdfunding (% p.a.) | 4.0 |
+| `regions` | Zielregionen fuer Grundstuecke | Berlin, Brandenburg, Sachsen, ... |
+| `pause_seconds` | Pause zwischen HTTP-Requests | 1.5 |
+| `ollama.url` | Ollama-API-Adresse | http://172.28.0.20:11434 |
+| `ollama.model` | LLM-Modell fuer KI-Scoring | gemma4:e4b |
+| `ollama.batch_size` | Max. Bewertungen pro Lauf | 20 |
+
+Zugangsdaten (DGA Login, Gmail, Telegram) liegen in `~/.stock_scanner_credentials`.
 
 ## Nutzung
 
 ```bash
-python3 investment_scanner.py
+python3 investment_scanner.py              # Vollstaendiger Scan + Report
+python3 investment_scanner.py --dry-run    # Ohne Scraping, leerer Report
+python3 investment_scanner.py --score      # Nur KI-Scoring (kein Scan)
+python3 investment_scanner.py --score-all  # Alle Objekte neu bewerten
+bash run_scanner.sh                        # Wrapper fuer Cron
 ```
 
-oder
-
-```bash
-bash run_scanner.sh
-```
-
-Review-Queue anzeigen:
+Review-Queue:
 
 ```bash
 python3 investment_scanner.py --list-review-queue
-```
-
-Deal markieren:
-
-```bash
 python3 investment_scanner.py \
   --review-link "https://example.com/deal" \
   --review-status interessant \
-  --review-note "Nur bei belastbarer Vermietung weiter prüfen"
+  --review-note "Nur bei belastbarer Vermietung weiter pruefen"
 ```
 
 ## Output
 
-Das Repo erzeugt Report-Dateien unter `output/YYYY-MM-DD/`, sofern der Scanner erfolgreich durchlaeuft.
+Report-Dateien unter `output/YYYY-MM-DD/`:
+- `investments.html` — Interaktiver HTML-Report mit Review-Queue
+- `investments.csv` — CSV-Export
 
-Der HTML-Report enthaelt zusaetzlich:
+## Sicherheit
 
-- Review-Zusammenfassung mit offenen / interessanten / nachzufassenden / ignorierten Deals
-- offene Review-Queue fuer Operatoren
-- Review-Status und Notiz direkt in den Deal-Tabellen
+- SQL Injection Fix: `_validate_identifier()` validiert dynamische SQL-Identifier
+- Credentials nicht im Code — alles ueber `~/.stock_scanner_credentials`
+- `config.yaml` in `.gitignore` (nur `.example` im Repo)
 
 ## Cron
 
 ```cron
-# Taeglich 06:00 UTC
 0 6 * * * cd /home/claude-agent/investment-scanner && /usr/bin/python3 investment_scanner.py >> logs/scanner.log 2>&1
-```
-
-## KI-Scoring via Gemma 4 (2026-04-09)
-
-- Automatische Immobilien-Bewertung via Ollama (`gemma4:e4b`, lokal)
-- Score 0-10 mit Headline, Analyse, Staerken/Schwaechen, Risiko-Einschaetzung
-- Laeuft nach jedem Scan (max 20 pro Batch), ~10s pro Bewertung
-- Ollama Chat-API: `http://172.28.0.20:11434`
-
-### CLI-Optionen
-
-```bash
-python3 investment_scanner.py --score        # Nur scoren (kein Scan)
-python3 investment_scanner.py --score-all    # Alle Objekte neu bewerten
 ```
 
 ## Unified Dashboard

@@ -6,12 +6,14 @@ import requests
 from pathlib import Path
 from bs4 import BeautifulSoup
 from pdfminer.high_level import extract_text
+from scanner_common import load_credentials
 
 logger = logging.getLogger(__name__)
 
 DGA_LOGIN_URL = "https://www.dga-ag.de/login.html"
-DGA_USER = "stephan@umzwei.de"
-DGA_PASS = "#Stiefel8"
+_creds = load_credentials()
+DGA_USER = _creds.get("DGA_USER", "")
+DGA_PASS = _creds.get("DGA_PASS", "")
 
 CACHE_DIR = Path(__file__).parent / "cache"
 CACHE_DIR.mkdir(exist_ok=True)

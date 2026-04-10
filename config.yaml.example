@@ -1,0 +1,50 @@
+# Investment Scanner — Konfiguration
+# ────────────────────────────────────
+
+# Grundstuecke
+max_price: 50000          # EUR Maximalpreis
+regions:
+  - berlin
+  - brandenburg
+  - mecklenburg
+  - sachsen-anhalt
+  - sachsen
+
+# Crowdfunding
+min_rendite: 4.0          # % p.a. Mindestrendite
+
+# Scraping
+pause_seconds: 1.5        # Pause zwischen HTTP-Requests
+
+# DGA Company-Mapping (Buchstabe → Name)
+dga_companies:
+  D: DGA
+  S: "Sächsische"
+  N: Norddeutsche
+  W: Westdeutsche
+  P: Plettner
+
+# DGA Kategorie-Mapping (Code → Anzeigename)
+dga_categories:
+  GRDBG: "Grundstück"
+  ETWTE: Eigentumswohnung
+  EFHZFH: "Ein-/Zweifamilienhaus"
+  MFHWGH: Mehrfamilienhaus
+  GE: Gewerbe
+  Special: Sonderobjekt
+
+# KI-Scoring (Ollama)
+ollama:
+  url: "http://localhost:11434"
+  model: "gemma4:e4b"
+  batch_size: 20
+  timeout: 120            # Sekunden
+  pause: 2                # Sekunden zwischen Aufrufen
+
+# ZVG Bundeslaender (Name → land_abk Code)
+zvg_bundeslaender:
+  Berlin: be
+  Brandenburg: br
+  Mecklenburg-VP: mv
+  Sachsen: sn
+  Sachsen-Anhalt: st
