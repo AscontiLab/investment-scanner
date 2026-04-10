@@ -192,16 +192,22 @@ def _call_ollama(user_prompt: str, retry: bool = True, system_prompt: str = None
         "options": {"num_predict": 300},
     }
 
-    try:
-        resp = requests.post(
-            f"{OLLAMA_URL}/api/chat",
-            json=payload,
-            timeout=REQUEST_TIMEOUT,
-        )
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        print(f"  [KI] Ollama-Fehler: {e}")
-        return None
+    for attempt in range(2):
+        try:
+            resp = requests.post(
+                f"{OLLAMA_URL}/api/chat",
+                json=payload,
+                timeout=REQUEST_TIMEOUT,
+            )
+            resp.raise_for_status()
+            break
+        except requests.RequestException as e:
+            if attempt == 0:
+                print(f"  [KI] Ollama-Timeout, Retry in 5s...")
+                time.sleep(5)
+                continue
+            print(f"  [KI] Ollama-Fehler auch nach Retry: {e}")
+            return None
 
     data = resp.json()
     content = data.get("message", {}).get("content", "").strip()

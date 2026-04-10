@@ -360,14 +360,21 @@ def _call_gemma(user_prompt: str) -> dict | None:
         "options": {"num_predict": DEEP_NUM_PREDICT_GEMMA},
     }
 
-    try:
-        resp = requests.post(
-            f"{OLLAMA_URL}/api/chat", json=payload, timeout=OLLAMA_TIMEOUT,
-        )
-        resp.raise_for_status()
-    except requests.RequestException as e:
-        print(f"  [Deep] Ollama-Fehler: {e}")
-        return None
+    import time as _time
+    for attempt in range(2):
+        try:
+            resp = requests.post(
+                f"{OLLAMA_URL}/api/chat", json=payload, timeout=OLLAMA_TIMEOUT,
+            )
+            resp.raise_for_status()
+            break
+        except requests.RequestException as e:
+            if attempt == 0:
+                print(f"  [Deep] Ollama-Timeout, Retry in 5s...")
+                _time.sleep(5)
+                continue
+            print(f"  [Deep] Ollama-Fehler auch nach Retry: {e}")
+            return None
 
     content = resp.json().get("message", {}).get("content", "").strip()
     return _parse_json_response(content)
