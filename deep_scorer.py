@@ -162,13 +162,14 @@ def _fetch_dga_detail(prop: dict, session: requests.Session) -> str:
                     parts.append(text)
 
         # Alle PDF-Links sammeln (Expose, Gutachten, Katalog, securedl)
+        from urllib.parse import urljoin
         pdf_links = []
         for a in soup.find_all("a", href=True):
             href = a["href"]
             link_text = a.get_text(strip=True).lower()
             if ".pdf" in href.lower() or "/securedl/" in href:
-                if href.startswith("/"):
-                    href = "https://www.dga-ag.de" + href
+                if not href.startswith("http"):
+                    href = urljoin(link, href)
                 # Label bestimmen
                 if "expos" in link_text or "securedl" in href:
                     label = "expose"
@@ -290,11 +291,11 @@ def _fetch_generic_detail(prop: dict, session: requests.Session) -> str:
                 parts.append(text)
 
         # PDF-Links sammeln
+        from urllib.parse import urljoin
         for a in soup.find_all("a", href=True):
             href = a["href"]
             if ".pdf" in href.lower():
-                if href.startswith("/"):
-                    from urllib.parse import urljoin
+                if not href.startswith("http"):
                     href = urljoin(link, href)
                 if href.startswith("http"):
                     pdf_path = _download_pdf(session, href, prefix="generic")
