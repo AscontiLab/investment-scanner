@@ -204,7 +204,11 @@ def _fetch_zvg_detail(prop: dict, session: requests.Session) -> str:
     parts = []
 
     try:
-        resp = session.get(link, timeout=20)
+        # ZVG-Portal braucht Referer-Header, sonst kommt nur "error"
+        resp = session.get(
+            link, timeout=20,
+            headers={"Referer": "https://www.zvg-portal.de/index.php?button=Suchen"},
+        )
         content = resp.content.decode("latin-1")
         soup = BeautifulSoup(content, "html.parser")
 
@@ -378,6 +382,9 @@ def _call_gemma(user_prompt: str) -> dict | None:
             return None
 
     content = resp.json().get("message", {}).get("content", "").strip()
+    if not content:
+        logger.warning("Gemma gab leeren Content zurueck")
+        return None
     return _parse_json_response(content)
 
 
@@ -566,6 +573,10 @@ def deep_score_property(prop: dict, session: requests.Session) -> dict | None:
             result = _call_gemma(user_prompt)
     else:
         result = _call_gemma(user_prompt)
+        if result is None:
+            # Fallback auf Claude bei Gemma-Fehler (leerer Output etc.)
+            print(f"  [Deep] Gemma-Fallback auf Claude")
+            result = _call_claude(user_prompt)
 
     if result is None:
         return None
