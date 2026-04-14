@@ -314,6 +314,96 @@ def _fetch_generic_detail(prop: dict, session: requests.Session) -> str:
         return ""
 
 
+def _fetch_wiwin_detail(prop: dict, session: requests.Session) -> str:
+    """Wiwin: Projektseite hat serverseitiges HTML."""
+    link = prop.get("link", "")
+    if not link:
+        return _build_crowdinvest_fallback(prop, "Wiwin")
+
+    try:
+        resp = session.get(link, timeout=20)
+        if resp.status_code != 200:
+            return _build_crowdinvest_fallback(prop, "Wiwin")
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        for tag in soup(["script", "style", "nav", "footer", "header"]):
+            tag.decompose()
+
+        parts = []
+        # Hauptcontent
+        main = soup.select_one("main, article, .product-detail, .project-detail, #content")
+        container = main if main else soup.body
+        if container:
+            text = container.get_text("\n", strip=True)
+            if len(text) > 100:
+                parts.append(text[:5000])
+
+        # PDF-Links (Factsheets, Prospekte)
+        from urllib.parse import urljoin
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if ".pdf" in href.lower():
+                if not href.startswith("http"):
+                    href = urljoin(link, href)
+                if href.startswith("http"):
+                    pdf_path = _download_pdf(session, href, prefix="wiwin")
+                    if pdf_path:
+                        pdf_text = _extract_pdf_text(pdf_path)
+                        if len(pdf_text) > 100:
+                            parts.append(f"--- PROSPEKT/FACTSHEET ---\n{pdf_text[:3000]}")
+
+        if not parts:
+            return _build_crowdinvest_fallback(prop, "Wiwin")
+        return "\n\n".join(parts)
+
+    except Exception as e:
+        logger.warning("Wiwin Detail-Fehler (%s): %s", link[:60], e)
+        return _build_crowdinvest_fallback(prop, "Wiwin")
+
+
+def _fetch_crowdinvest_detail(prop: dict, session: requests.Session, platform: str) -> str:
+    """Fallback fuer SPA-Plattformen (Exporo, Companisto etc.): baut Detail-Text aus DB-Feldern."""
+    return _build_crowdinvest_fallback(prop, platform)
+
+
+def _build_crowdinvest_fallback(prop: dict, platform: str) -> str:
+    """Baut einen synthetischen Detail-Text aus vorhandenen DB-Feldern."""
+    parts = [f"Plattform: {platform}", f"Projekt: {prop.get('title', 'Unbekannt')}"]
+
+    if prop.get("location"):
+        parts.append(f"Standort: {prop['location']}")
+    if prop.get("region"):
+        parts.append(f"Region: {prop['region']}")
+    if prop.get("rendite_pct"):
+        parts.append(f"Rendite: {prop['rendite_pct']}% p.a.")
+    if prop.get("laufzeit"):
+        parts.append(f"Laufzeit: {prop['laufzeit']}")
+    if prop.get("min_anlage_eur"):
+        parts.append(f"Mindestanlage: {prop['min_anlage_eur']:,.0f} EUR".replace(",", "."))
+    if prop.get("typ"):
+        parts.append(f"Typ: {prop['typ']}")
+    if prop.get("status"):
+        parts.append(f"Status: {prop['status']}")
+    if prop.get("price"):
+        parts.append(f"Volumen: {prop['price']:,.0f} EUR".replace(",", "."))
+    if prop.get("category"):
+        parts.append(f"Kategorie: {prop['category']}")
+
+    # KI-Erstbewertung als Kontext (falls vorhanden)
+    if prop.get("ki_analysis"):
+        parts.append(f"\nErste KI-Analyse:\n{prop['ki_analysis'][:500]}")
+    if prop.get("ki_strengths"):
+        parts.append(f"Staerken: {prop['ki_strengths'][:300]}")
+    if prop.get("ki_weaknesses"):
+        parts.append(f"Schwaechen: {prop['ki_weaknesses'][:300]}")
+
+    text = "\n".join(parts)
+    # Mindestens 100 Zeichen braucht deep_score_property
+    if len(text) < 100:
+        return ""
+    return text
+
+
 def fetch_detail_text(prop: dict, session: requests.Session) -> str:
     """Dispatcht zum richtigen Fetcher basierend auf der Quelle."""
     source = (prop.get("source") or "").lower()
@@ -329,6 +419,12 @@ def fetch_detail_text(prop: dict, session: requests.Session) -> str:
         return _fetch_zvg_detail(prop, session)
     elif "kleinanzeigen" in source or "kleinanzeigen" in link:
         return _fetch_kleinanzeigen_detail(prop, session)
+    elif "exporo" in source or "exporo.de" in link:
+        return _fetch_crowdinvest_detail(prop, session, "Exporo")
+    elif "wiwin" in source or "wiwin.de" in link:
+        return _fetch_wiwin_detail(prop, session)
+    elif "companisto" in source or "companisto" in link:
+        return _fetch_crowdinvest_detail(prop, session, "Companisto")
     else:
         return _fetch_generic_detail(prop, session)
 
