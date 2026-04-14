@@ -357,13 +357,14 @@ def save_deep_score(link: str, result: dict) -> bool:
     """Speichert Deep-Score-Ergebnis fuer ein Objekt."""
     today = datetime.now().strftime("%Y-%m-%d")
     with _connect() as conn:
+        score = result["score"]
         cur = conn.execute(
             """UPDATE properties
                SET deep_score = ?, deep_headline = ?, deep_analysis = ?,
                    deep_risk = ?, deep_scored_at = ?, deep_document_text = ?
                WHERE link = ?""",
             (
-                result["score"],
+                score,
                 result.get("headline", ""),
                 result.get("analysis", ""),
                 result.get("risk", "mittel"),
@@ -372,6 +373,13 @@ def save_deep_score(link: str, result: dict) -> bool:
                 link,
             ),
         )
+        # Deep Score unter 5 automatisch ausblenden
+        if score < 5:
+            conn.execute(
+                """UPDATE properties SET operator_status = 'hidden', operator_updated_at = ?
+                   WHERE link = ? AND COALESCE(operator_status, '') NOT IN ('interessant', 'nachfassen')""",
+                (today, link),
+            )
         conn.commit()
         return cur.rowcount > 0
 
