@@ -2,14 +2,16 @@
 
 ## Ueberblick
 
-Taeglich laufender Scanner fuer Grundstuecke und Crowdfunding-Deals mit SQLite-Datenbank, DGA-Katalog-Extraktion, KI-Scoring und HTML/CSV-Reporting.
+Taeglich laufender Scanner fuer Grundstuecke und Crowdfunding-Deals mit SQLite-Datenbank, DGA-Katalog-Extraktion, zweistufigem KI-Scoring (KI Score + Deep Score) und HTML/CSV-Reporting.
 
 ## Zweck
 
 - Guenstige Grundstuecksangebote aggregieren (Kleinanzeigen, DGA, ZVG)
-- Crowdfunding-Projekte nach Mindestrendite filtern (Bergfuerst, Wiwin, Bettervest, Exporo)
+- Crowdfunding-Projekte nach Mindestrendite filtern (Bergfuerst, Wiwin, Bettervest, Exporo, Companisto)
 - Ergebnisse als HTML- und CSV-Report bereitstellen
 - KI-Scoring via Ollama (Gemma 4)
+- Deep Scoring: Dokumenten-basierte Zweitbewertung (Gemma oder Claude)
+- Telegram-Alerts bei Deep Score >= 7
 
 ## Projektstruktur
 
@@ -19,7 +21,7 @@ config.py                  # Laedt config.yaml, stellt Konstanten bereit
 config.yaml                # Zentrale Konfiguration (nicht im Repo, siehe .example)
 config.yaml.example        # Vorlage fuer config.yaml
 
-scrapers/                  # Ein Modul pro Datenquelle
+scrapers/                  # Ein Modul pro Datenquelle (8 Quellen)
   __init__.py              # Re-Export aller Scraper
   base.py                  # Gemeinsame Hilfsfunktionen (Session, Parser, Regex)
   kleinanzeigen.py         # Kleinanzeigen.de
@@ -28,11 +30,13 @@ scrapers/                  # Ein Modul pro Datenquelle
   bergfuerst.py            # Bergfuerst Crowdinvesting
   wiwin.py                 # Wiwin Crowdinvesting
   bettervest.py            # Bettervest (PV/Energie)
-  exporo.py                # Exporo (Immobilien)
+  exporo.py                # Exporo (Playwright Login + GraphQL)
+  companisto.py            # Companisto (Startup-Investments)
 
 invest_db.py               # SQLite-Datenbankmodul (Deal-Tracking, Review-Queue)
 dga_catalog.py             # DGA Katalog-Extraktor (PDFs → Objektdetails)
 ki_scorer.py               # KI-Scoring via Ollama (Gemma 4)
+deep_scorer.py             # Deep Scoring — Stufe 2 (Dokumente + Gemma/Claude)
 send_report.py             # E-Mail-Versand
 run_scanner.sh             # Wrapper fuer Cron
 ```
@@ -104,6 +108,16 @@ Report-Dateien unter `output/YYYY-MM-DD/`:
 ```cron
 0 6 * * * cd /home/claude-agent/investment-scanner && /usr/bin/python3 investment_scanner.py >> logs/scanner.log 2>&1
 ```
+
+## Deep Scoring Fixes (2026-04-14)
+
+- **ZVG**: Referer-Header hinzugefuegt (Portal erfordert ihn)
+- **Exporo**: Synthetischer Detail-Text aus DB-Feldern (Flutter SPA hat kein HTML)
+- **Wiwin**: Dedizierter HTML-Fetcher mit PDF-Download
+- **Companisto**: Synthetischer Fallback wie Exporo
+- **Gemma4 Fallback**: Bei leerem Gemma-Output automatisch Claude als Fallback
+- **Auto-Hide**: `deep_score < 5` setzt automatisch `operator_status='hidden'`
+- **Dashboard**: Deep-Score-Button repariert (Auth-Pfad, Subprocess, base_path in JS)
 
 ## Unified Dashboard
 
